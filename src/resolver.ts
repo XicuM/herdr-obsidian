@@ -14,6 +14,10 @@ export interface Conversation {
 export class AgentResolver {
   constructor(private client: HerdrClient) {}
 
+  /**
+   * Find the singleton workspace for a vault folder.
+   * Matches by folder path on pane cwd or matching label.
+   */
   findWorkspaceForFolder(snapshot: Snapshot, folderPath: string): Workspace | null {
     const norm = path.resolve(folderPath);
     const folderBase = path.basename(norm);
@@ -41,11 +45,14 @@ export class AgentResolver {
     return null;
   }
 
+  /**
+   * Ensure a singleton workspace exists for this vault; create it if missing.
+   */
   async ensureWorkspace(folderPath: string, snapshot: Snapshot): Promise<string> {
     const existing = this.findWorkspaceForFolder(snapshot, folderPath);
     if (existing) return existing.workspace_id;
     const label = path.basename(path.resolve(folderPath));
-    const created = await this.client.createWorkspace(path.resolve(folderPath), label, true);
+    const created = await this.client.createWorkspace(path.resolve(folderPath), label, false);
     return created.workspace.workspace_id;
   }
 
@@ -65,7 +72,7 @@ export class AgentResolver {
           pane_id: pane?.pane_id || t.tab_id.replace(/:t([^:]*)$/, ':p$1'),
           agent,
           status,
-          label: agent || 'shell',
+          label: agent || t.label || 'shell',
           running: !!agent || (t.pane_count ?? 0) > 0
         } as Conversation;
       })

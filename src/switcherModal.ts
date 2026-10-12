@@ -1,11 +1,11 @@
-import { App, FuzzySuggestModal, Notice } from 'obsidian';
+import { App, FuzzySuggestModal } from 'obsidian';
 import { Conversation } from './resolver';
 import { statusEmoji } from './notifier';
 import { HARNESS_KINDS } from './herdrClient';
 
 export interface ActionItem {
   id: string;
-  type: 'conversation' | 'new_conversation' | 'new_shell' | 'focus_workspace' | 'refresh' | 'close_conversation';
+  type: 'conversation' | 'new_conversation' | 'new_shell' | 'refresh' | 'close_conversation';
   title: string;
   description: string;
   conv?: Conversation;
@@ -24,7 +24,7 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
   ) {
     super(app);
     this.onSelectAction = onSelectAction;
-    this.setPlaceholder(mode === 'close' ? 'Select a conversation tab to close...' : 'Switch Herdr conversation tab or run action...');
+    this.setPlaceholder(mode === 'close' ? 'Select a conversation tab to close...' : 'Switch Herdr agent tab or action...');
 
     if (mode === 'close') {
       this.items = convs.map((c) => {
@@ -63,12 +63,6 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
     }
 
     this.items.push(
-      {
-        id: '__focus__',
-        type: 'focus_workspace',
-        title: '🏠 Focus Vault Workspace',
-        description: 'Switch Herdr daemon view to this vault workspace'
-      },
       {
         id: '__shell__',
         type: 'new_shell',

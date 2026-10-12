@@ -1,24 +1,21 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, FileSystemAdapter } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf } from 'obsidian';
 import * as os from 'os';
 import * as path from 'path';
-import * as fs from 'fs';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { AgentResolver, Conversation } from './resolver';
 import { AgentAttender, statusEmoji } from './notifier';
 import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherModal';
-import { launchTerminal } from './terminalModal';
+import { HerdrTerminalView, HERDR_VIEW_TYPE } from './terminalView';
 
 interface HerdrSettings {
   focusOnBlocked: boolean;
   session: string;
-  terminalApp: string;
   refreshIntervalSeconds: number;
 }
 
 const DEFAULT_SETTINGS: HerdrSettings = {
   focusOnBlocked: true,
-  session: '', // Empty means default desktop session
-  terminalApp: 'default',
+  session: '', // Default desktop session
   refreshIntervalSeconds: 2
 };
 
@@ -31,10 +28,17 @@ export default class HerdrCompanionPlugin extends Plugin {
   private refreshTimer: any;
   private convByTab = new Map<string, Conversation>();
   private currentActiveTabId?: string;
+  private singletonWorkspaceId?: string;
 
   async onload() {
     await this.loadSettings();
     this.initClient();
+
+    // Register Terminal View in Obsidian UI
+    this.registerView(
+      HERDR_VIEW_TYPE,
+      (leaf) => new HerdrTerminalView(leaf, this)
+    );
 
     // Create Status Bar Item
     this.statusBarEl = this.addStatusBarItem();
@@ -43,12 +47,18 @@ export default class HerdrCompanionPlugin extends Plugin {
       this.pickConversation('switch');
     });
 
-    // Add Ribbon Icon
-    this.addRibbonIcon('terminal', 'Herdr Switcher', () => {
-      this.pickConversation('switch');
+    // Add Ribbon Icon to toggle the Herdr Agent Terminal UI
+    this.addRibbonIcon('terminal', 'Open Herdr Agents Terminal', () => {
+      this.activateTerminalView();
     });
 
     // Add Commands
+    this.addCommand({
+      id: 'open-herdr-view',
+      name: 'Open Herdr Terminal View',
+      callback: () => this.activateTerminalView()
+    });
+
     this.addCommand({
       id: 'switch-conversation',
       name: 'Switch Agent Conversation',
@@ -80,18 +90,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: 'focus-workspace',
-      name: 'Focus Vault Workspace',
-      callback: () => this.focusWorkspace(true)
-    });
-
-    this.addCommand({
-      id: 'open-terminal',
-      name: 'Open Herdr Terminal Window',
-      callback: () => this.openTerminal()
-    });
-
-    this.addCommand({
       id: 'close-conversation',
       name: 'Close Conversation',
       callback: () => this.pickConversation('close')
@@ -114,7 +112,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     this.setupRefresh();
     this.refreshState();
 
-    // Subscribe to daemon socket events
     this.subscribeEvents();
   }
 
@@ -129,17 +126,54 @@ export default class HerdrCompanionPlugin extends Plugin {
     this.resolver = new AgentResolver(this.client);
     this.attender = new AgentAttender(this.settings);
     this.attender.setOnFocus((conv) => {
-      this.client.focusWorkspace(conv.workspace_id).catch(() => {});
-      this.client.focusTab(conv.tab_id).catch(() => {});
+      this.activateTerminalView().then(() => {
+        const view = this.getTerminalView();
+        view?.switchToTab(conv);
+      });
     });
   }
 
-  private getVaultFolderPath(): string {
+  public getVaultFolderPath(): string {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) {
       return adapter.getBasePath();
     }
     return os.homedir();
+  }
+
+  public getConversations(): Conversation[] {
+    return [...this.convByTab.values()];
+  }
+
+  public async activateTerminalView(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf: WorkspaceLeaf | null = null;
+    const leaves = workspace.getLeavesOfType(HERDR_VIEW_TYPE);
+
+    if (leaves.length > 0) {
+      leaf = leaves[0];
+    } else {
+      // Open in the right dock / sidebar, or main leaf if preferred
+      leaf = workspace.getRightLeaf(false);
+      if (leaf) {
+        await leaf.setViewState({
+          type: HERDR_VIEW_TYPE,
+          active: true
+        });
+      }
+    }
+
+    if (leaf) {
+      workspace.revealLeaf(leaf);
+    }
+  }
+
+  public getTerminalView(): HerdrTerminalView | null {
+    const leaves = this.app.workspace.getLeavesOfType(HERDR_VIEW_TYPE);
+    if (leaves.length > 0 && leaves[0].view instanceof HerdrTerminalView) {
+      return leaves[0].view as HerdrTerminalView;
+    }
+    return null;
   }
 
   private setupRefresh() {
@@ -166,9 +200,7 @@ export default class HerdrCompanionPlugin extends Plugin {
           this.refreshState();
         }
       })
-      .catch(() => {
-        // Will retry on poll
-      });
+      .catch(() => {});
   }
 
   async refreshState() {
@@ -185,26 +217,24 @@ export default class HerdrCompanionPlugin extends Plugin {
     }
 
     const folder = this.getVaultFolderPath();
+    // Ensure singleton workspace for this vault
+    try {
+      this.singletonWorkspaceId = await this.resolver.ensureWorkspace(folder, snapshot);
+    } catch {}
+
     const convs = this.resolver.buildConversations(snapshot, folder);
     this.convByTab = new Map(convs.map((c) => [c.tab_id, c]));
     this.attender.setConversations(convs);
     this.updateStatusBar(convs, true);
 
-    await this.syncHerdrTabLabels(convs, snapshot);
+    // Update active in-app terminal tabs if open
+    const view = this.getTerminalView();
+    if (view) {
+      view.renderTabs();
+    }
 
     for (const c of convs) {
       this.attender.handleStatusChange(c.pane_id, c.status);
-    }
-  }
-
-  private async syncHerdrTabLabels(convs: Conversation[], snapshot: Snapshot) {
-    for (const c of convs) {
-      const emoji = statusEmoji(c.status);
-      const desiredLabel = emoji ? `${emoji} ${c.label}` : c.label;
-      const snapTab = (snapshot.tabs || []).find((t) => t.tab_id === c.tab_id);
-      if (snapTab && snapTab.label !== desiredLabel) {
-        await this.client.renameTab(c.tab_id, desiredLabel);
-      }
     }
   }
 
@@ -222,7 +252,7 @@ export default class HerdrCompanionPlugin extends Plugin {
 
     if (convs.length === 0) {
       this.statusBarEl.createSpan({ text: '⚡ Herdr (+)' });
-      this.statusBarEl.setAttribute('aria-label', 'No active conversations in this vault. Click to start or switch.');
+      this.statusBarEl.setAttribute('aria-label', 'No active conversations in this vault. Click to open or create one.');
       return;
     }
 
@@ -232,7 +262,7 @@ export default class HerdrCompanionPlugin extends Plugin {
     if (blocked.length > 0) {
       this.statusBarEl.addClass('is-blocked');
       this.statusBarEl.createSpan({ text: `🔔 Herdr: ${blocked.map((b) => b.label).join(', ')} blocked` });
-      this.statusBarEl.setAttribute('aria-label', `${blocked.length} agent(s) waiting for input. Click to switch.`);
+      this.statusBarEl.setAttribute('aria-label', `${blocked.length} agent(s) waiting for input. Click to open.`);
     } else if (working.length > 0) {
       this.statusBarEl.addClass('is-working');
       const labels = convs
@@ -242,7 +272,7 @@ export default class HerdrCompanionPlugin extends Plugin {
         })
         .join(' ');
       this.statusBarEl.createSpan({ text: `🔄 Herdr: ${labels}` });
-      this.statusBarEl.setAttribute('aria-label', `${working.length} agent(s) working. Click to switch.`);
+      this.statusBarEl.setAttribute('aria-label', `${working.length} agent(s) working. Click to open.`);
     } else {
       const labels = convs
         .map((c) => {
@@ -251,7 +281,7 @@ export default class HerdrCompanionPlugin extends Plugin {
         })
         .join(' ');
       this.statusBarEl.createSpan({ text: `💻 Herdr: ${labels}` });
-      this.statusBarEl.setAttribute('aria-label', `${convs.length} agent(s) active. Click to switch.`);
+      this.statusBarEl.setAttribute('aria-label', `${convs.length} agent(s) active. Click to open.`);
     }
   }
 
@@ -264,9 +294,7 @@ export default class HerdrCompanionPlugin extends Plugin {
         if (item.type === 'conversation' && item.conv) {
           this.activateConversation(item.conv);
         } else if (item.type === 'close_conversation' && item.conv) {
-          this.closeConversation(item.conv);
-        } else if (item.type === 'focus_workspace') {
-          this.focusWorkspace(true);
+          this.closeConversationTab(item.conv);
         } else if (item.type === 'new_shell') {
           this.newShellTab();
         } else if (item.type === 'new_conversation') {
@@ -280,33 +308,32 @@ export default class HerdrCompanionPlugin extends Plugin {
     modal.open();
   }
 
-  private async activateConversation(conv: Conversation) {
+  public async activateConversation(conv: Conversation) {
     this.currentActiveTabId = conv.tab_id;
-    try {
-      await this.client.focusWorkspace(conv.workspace_id);
-      await this.client.focusTab(conv.tab_id);
-      new Notice(`Switched to Herdr tab: ${conv.label}`);
-    } catch (e: any) {
-      new Notice(`Failed to switch: ${e.message}`);
+    await this.activateTerminalView();
+    const view = this.getTerminalView();
+    if (view) {
+      view.switchToTab(conv);
     }
   }
 
-  private async closeConversation(conv: Conversation) {
+  public async closeConversationTab(conv: Conversation) {
     try {
       const snap = await this.client.snapshot();
       const wsTabs = (snap.tabs || []).filter((t) => t.workspace_id === conv.workspace_id);
       if (wsTabs.length <= 1) {
-        await this.client.createTab(conv.workspace_id, 'shell', true);
+        // If it's the last tab in the vault's singleton workspace, spawn a fresh shell tab first
+        await this.client.createTab(conv.workspace_id, 'shell', false);
       }
       await this.client.closeTab(conv.tab_id);
-      new Notice(`Closed conversation: ${conv.label}`);
+      new Notice(`Closed tab: ${conv.label}`);
       this.refreshState();
     } catch (e: any) {
-      new Notice(`Failed to close conversation: ${e.message}`);
+      new Notice(`Failed to close tab: ${e.message}`);
     }
   }
 
-  private promptNewConversation() {
+  public promptNewConversation() {
     new HarnessPickerModal(this.app, (kind) => {
       this.startAgentConversation(kind);
     }).open();
@@ -321,9 +348,9 @@ export default class HerdrCompanionPlugin extends Plugin {
     try {
       const snapshot = await this.client.snapshot();
       const workspaceId = await this.resolver.ensureWorkspace(folder, snapshot);
-      await this.client.focusWorkspace(workspaceId);
+      this.singletonWorkspaceId = workspaceId;
 
-      const tabRes = await this.client.createTab(workspaceId, null, true);
+      const tabRes = await this.client.createTab(workspaceId, null, false);
       const paneId = tabRes?.root_pane?.pane_id;
       const tabId = tabRes?.tab?.tab_id;
       if (!paneId || !tabId) {
@@ -332,19 +359,25 @@ export default class HerdrCompanionPlugin extends Plugin {
       }
 
       this.currentActiveTabId = tabId;
-      await this.client.focusTab(tabId);
 
       const name = `${kind.replace(/[^a-z0-9_]/g, '_')}_${Date.now().toString(36)}`;
       new Notice(`Starting ${kind} agent...`);
       await this.client.agentStart(name, kind, paneId, [], 45000);
       new Notice(`Agent ${kind} started!`);
-      this.refreshState();
+
+      await this.refreshState();
+      await this.activateTerminalView();
+      const view = this.getTerminalView();
+      const conv = this.convByTab.get(tabId);
+      if (view && conv) {
+        view.switchToTab(conv);
+      }
     } catch (e: any) {
       new Notice(`Error starting agent: ${e.message}`);
     }
   }
 
-  private async newShellTab() {
+  public async newShellTab() {
     if (!this.client.isAvailable()) {
       new Notice('Herdr is not running.');
       return;
@@ -353,45 +386,26 @@ export default class HerdrCompanionPlugin extends Plugin {
     try {
       const snap = await this.client.snapshot();
       const workspaceId = await this.resolver.ensureWorkspace(folder, snap);
-      await this.client.focusWorkspace(workspaceId);
-      const tabRes = await this.client.createTab(workspaceId, 'shell', true);
+      this.singletonWorkspaceId = workspaceId;
+      const tabRes = await this.client.createTab(workspaceId, 'shell', false);
       if (tabRes?.tab?.tab_id) {
         this.currentActiveTabId = tabRes.tab.tab_id;
-        await this.client.focusTab(tabRes.tab.tab_id);
         new Notice('Created new shell tab.');
       }
-      this.refreshState();
+      await this.refreshState();
+      await this.activateTerminalView();
+      const view = this.getTerminalView();
+      if (view && tabRes?.tab?.tab_id) {
+        const conv = this.convByTab.get(tabRes.tab.tab_id);
+        if (conv) view.switchToTab(conv);
+      }
     } catch (e: any) {
       new Notice(`Failed to create shell tab: ${e.message}`);
     }
   }
 
-  private async focusWorkspace(notify = false) {
-    if (!this.client.isAvailable()) return;
-    const folder = this.getVaultFolderPath();
-    try {
-      const snap = await this.client.snapshot();
-      const wsId = await this.resolver.ensureWorkspace(folder, snap);
-      if (wsId) {
-        await this.client.focusWorkspace(wsId);
-        if (notify) new Notice('Herdr workspace focused.');
-      }
-      this.refreshState();
-    } catch (e: any) {
-      if (notify) new Notice(`Failed to focus workspace: ${e.message}`);
-    }
-  }
-
-  private openTerminal() {
-    const folder = this.getVaultFolderPath();
-    const sessionArg = this.settings.session ? `--session "${this.settings.session}"` : '';
-    const configPath = this.settings.session
-      ? path.join(os.homedir(), '.config', 'herdr', 'sessions', this.settings.session, 'config.toml')
-      : path.join(os.homedir(), '.config', 'herdr', 'config.toml');
-    const configEnv = fs.existsSync(configPath) ? `HERDR_CONFIG_PATH="${configPath}" ` : '';
-    const cmd = `cd "${folder}" && env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID ${configEnv}herdr ${sessionArg}`.trim();
-
-    launchTerminal(this.app, cmd, folder, this.settings.terminalApp);
+  public focusHerdrTab(tabId: string) {
+    this.client.focusTab(tabId).catch(() => {});
   }
 
   private switchNext() {
@@ -414,6 +428,7 @@ export default class HerdrCompanionPlugin extends Plugin {
     const lines: string[] = [];
     const folder = this.getVaultFolderPath();
     lines.push(`Vault folder: ${folder}`);
+    lines.push(`Singleton workspace ID: ${this.singletonWorkspaceId || '(none)'}`);
     lines.push(`Socket: ${this.client.getSocketPath()}`);
     lines.push(`Available: ${this.client.isAvailable()}`);
     try {
@@ -422,7 +437,7 @@ export default class HerdrCompanionPlugin extends Plugin {
       const convs = this.resolver.buildConversations(snap, folder);
       lines.push(`Vault Conversations: ${convs.length}`);
       for (const c of convs) {
-        lines.push(` - [${c.status}] ${c.label} (${c.tab_id})`);
+        lines.push(` - [${c.status}] ${c.label} (${c.tab_id} -> ${c.pane_id})`);
       }
     } catch (e: any) {
       lines.push(`Snapshot failed: ${e.message}`);
@@ -457,7 +472,7 @@ class HerdrSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Focus On Blocked')
-      .setDesc('Bring tab / notify when an agent is blocked waiting for input.')
+      .setDesc('Bring terminal view / notify when an agent is blocked waiting for input.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.focusOnBlocked).onChange(async (val) => {
           this.plugin.settings.focusOnBlocked = val;
@@ -467,26 +482,13 @@ class HerdrSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Herdr Session Name')
-      .setDesc('Leave blank to use the default session (shared with your desktop/CLI), or specify a named session.')
+      .setDesc('Leave blank to use the default session, or specify a named session.')
       .addText((text) =>
         text
           .setPlaceholder('(default)')
           .setValue(this.plugin.settings.session)
           .onChange(async (val) => {
             this.plugin.settings.session = val.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName('Terminal Launcher')
-      .setDesc('Terminal command to launch Herdr TUI (e.g., "alacritty", "kitty", "foot", or "default").')
-      .addText((text) =>
-        text
-          .setPlaceholder('default')
-          .setValue(this.plugin.settings.terminalApp)
-          .onChange(async (val) => {
-            this.plugin.settings.terminalApp = val.trim();
             await this.plugin.saveSettings();
           })
       );
