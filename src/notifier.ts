@@ -2,22 +2,6 @@ import { Notice } from 'obsidian';
 import { AgentStatus } from './herdrClient';
 import { Conversation } from './resolver';
 
-export function statusEmoji(status: AgentStatus): string {
-  switch (status) {
-    case 'working':
-      return '🟡';
-    case 'blocked':
-      return '🔴';
-    case 'done':
-      return '🟢';
-    case 'idle':
-      return '⚪';
-    case 'unknown':
-    default:
-      return '';
-  }
-}
-
 export class AgentAttender {
   private last = new Map<string, AgentStatus>();
   private convByPane = new Map<string, Conversation>();
@@ -54,8 +38,6 @@ export class AgentAttender {
     if (this.onFocus) {
       this.onFocus(conv);
     }
-    const emoji = statusEmoji(conv.status);
-    const emojiStr = emoji ? ` (${emoji})` : '';
-    new Notice(`Herdr: ${conv.label}${emojiStr} is blocked and waiting for your input!`, 8000);
+    new Notice(`Herdr: ${conv.label} is blocked and waiting for input!`, 8000);
   }
 }

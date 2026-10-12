@@ -3,19 +3,24 @@ import * as os from 'os';
 import * as path from 'path';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { AgentResolver, Conversation } from './resolver';
-import { AgentAttender, statusEmoji } from './notifier';
+import { AgentAttender } from './notifier';
 import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherModal';
 import { HerdrTerminalView, HERDR_VIEW_TYPE } from './terminalView';
+import { RenameTabModal } from './renameModal';
 
 interface HerdrSettings {
   focusOnBlocked: boolean;
   session: string;
+  themeMode: 'auto' | 'dark' | 'light';
+  fontSize: number;
   refreshIntervalSeconds: number;
 }
 
 const DEFAULT_SETTINGS: HerdrSettings = {
   focusOnBlocked: true,
   session: '', // Default desktop session
+  themeMode: 'auto', // Follow Obsidian theme
+  fontSize: 13,
   refreshIntervalSeconds: 2
 };
 
@@ -48,11 +53,11 @@ export default class HerdrCompanionPlugin extends Plugin {
     });
 
     // Add Ribbon Icon to toggle the Herdr Agent Terminal UI
-    this.addRibbonIcon('terminal', 'Open Herdr Agents Terminal', () => {
+    this.addRibbonIcon('terminal', 'Open Herdr Terminal', () => {
       this.activateTerminalView();
     });
 
-    // Add Commands
+    // Commands
     this.addCommand({
       id: 'open-herdr-view',
       name: 'Open Herdr Terminal View',
@@ -90,6 +95,23 @@ export default class HerdrCompanionPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'rename-current-tab',
+      name: 'Rename Active Tab',
+      callback: () => {
+        const view = this.getTerminalView();
+        const convs = this.getConversations();
+        const active = convs.find((c) => c.tab_id === this.currentActiveTabId) || convs[0];
+        if (active) {
+          new RenameTabModal(this.app, active.label, (newName) => {
+            this.renameConversationTab(active, newName);
+          }).open();
+        } else {
+          new Notice('No active tab to rename.');
+        }
+      }
+    });
+
+    this.addCommand({
       id: 'close-conversation',
       name: 'Close Conversation',
       callback: () => this.pickConversation('close')
@@ -99,12 +121,6 @@ export default class HerdrCompanionPlugin extends Plugin {
       id: 'refresh-status',
       name: 'Refresh Herdr Status',
       callback: () => this.refreshState()
-    });
-
-    this.addCommand({
-      id: 'diagnose',
-      name: 'Diagnose Herdr Connection',
-      callback: () => this.diagnose()
     });
 
     this.addSettingTab(new HerdrSettingTab(this.app, this));
@@ -153,7 +169,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     if (leaves.length > 0) {
       leaf = leaves[0];
     } else {
-      // Open in the right dock / sidebar, or main leaf if preferred
       leaf = workspace.getRightLeaf(false);
       if (leaf) {
         await leaf.setViewState({
@@ -217,7 +232,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     }
 
     const folder = this.getVaultFolderPath();
-    // Ensure singleton workspace for this vault
     try {
       this.singletonWorkspaceId = await this.resolver.ensureWorkspace(folder, snapshot);
     } catch {}
@@ -227,7 +241,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     this.attender.setConversations(convs);
     this.updateStatusBar(convs, true);
 
-    // Update active in-app terminal tabs if open
     const view = this.getTerminalView();
     if (view) {
       view.renderTabs();
@@ -245,13 +258,13 @@ export default class HerdrCompanionPlugin extends Plugin {
 
     if (!available) {
       this.statusBarEl.addClass('is-offline');
-      this.statusBarEl.createSpan({ text: '🚫 Herdr (offline)' });
+      this.statusBarEl.createSpan({ text: 'Herdr (offline)' });
       this.statusBarEl.setAttribute('aria-label', 'Herdr daemon is not running');
       return;
     }
 
     if (convs.length === 0) {
-      this.statusBarEl.createSpan({ text: '⚡ Herdr (+)' });
+      this.statusBarEl.createSpan({ text: 'Herdr' });
       this.statusBarEl.setAttribute('aria-label', 'No active conversations in this vault. Click to open or create one.');
       return;
     }
@@ -259,28 +272,19 @@ export default class HerdrCompanionPlugin extends Plugin {
     const blocked = convs.filter((c) => c.status === 'blocked');
     const working = convs.filter((c) => c.status === 'working');
 
+    const topStatus = blocked.length > 0 ? 'blocked' : working.length > 0 ? 'working' : 'done';
+    this.statusBarEl.createSpan({ cls: `herdr-status-dot status-${topStatus}` });
+
     if (blocked.length > 0) {
       this.statusBarEl.addClass('is-blocked');
-      this.statusBarEl.createSpan({ text: `🔔 Herdr: ${blocked.map((b) => b.label).join(', ')} blocked` });
+      this.statusBarEl.createSpan({ text: `Herdr: ${blocked.map((b) => b.label).join(', ')} blocked` });
       this.statusBarEl.setAttribute('aria-label', `${blocked.length} agent(s) waiting for input. Click to open.`);
     } else if (working.length > 0) {
       this.statusBarEl.addClass('is-working');
-      const labels = convs
-        .map((c) => {
-          const emoji = statusEmoji(c.status);
-          return emoji ? `${emoji} ${c.label}` : c.label;
-        })
-        .join(' ');
-      this.statusBarEl.createSpan({ text: `🔄 Herdr: ${labels}` });
+      this.statusBarEl.createSpan({ text: `Herdr (${working.length} working)` });
       this.statusBarEl.setAttribute('aria-label', `${working.length} agent(s) working. Click to open.`);
     } else {
-      const labels = convs
-        .map((c) => {
-          const emoji = statusEmoji(c.status);
-          return emoji ? `${emoji} ${c.label}` : c.label;
-        })
-        .join(' ');
-      this.statusBarEl.createSpan({ text: `💻 Herdr: ${labels}` });
+      this.statusBarEl.createSpan({ text: `Herdr (${convs.length})` });
       this.statusBarEl.setAttribute('aria-label', `${convs.length} agent(s) active. Click to open.`);
     }
   }
@@ -317,12 +321,21 @@ export default class HerdrCompanionPlugin extends Plugin {
     }
   }
 
+  public async renameConversationTab(conv: Conversation, newName: string) {
+    try {
+      await this.client.renameTab(conv.tab_id, newName);
+      new Notice(`Renamed tab to ${newName}`);
+      await this.refreshState();
+    } catch (e: any) {
+      new Notice(`Failed to rename tab: ${e.message}`);
+    }
+  }
+
   public async closeConversationTab(conv: Conversation) {
     try {
       const snap = await this.client.snapshot();
       const wsTabs = (snap.tabs || []).filter((t) => t.workspace_id === conv.workspace_id);
       if (wsTabs.length <= 1) {
-        // If it's the last tab in the vault's singleton workspace, spawn a fresh shell tab first
         await this.client.createTab(conv.workspace_id, 'shell', false);
       }
       await this.client.closeTab(conv.tab_id);
@@ -350,7 +363,7 @@ export default class HerdrCompanionPlugin extends Plugin {
       const workspaceId = await this.resolver.ensureWorkspace(folder, snapshot);
       this.singletonWorkspaceId = workspaceId;
 
-      const tabRes = await this.client.createTab(workspaceId, null, false);
+      const tabRes = await this.client.createTab(workspaceId, kind, false);
       const paneId = tabRes?.root_pane?.pane_id;
       const tabId = tabRes?.tab?.tab_id;
       if (!paneId || !tabId) {
@@ -424,27 +437,6 @@ export default class HerdrCompanionPlugin extends Plugin {
     this.activateConversation(convs[prevIdx]);
   }
 
-  private async diagnose() {
-    const lines: string[] = [];
-    const folder = this.getVaultFolderPath();
-    lines.push(`Vault folder: ${folder}`);
-    lines.push(`Singleton workspace ID: ${this.singletonWorkspaceId || '(none)'}`);
-    lines.push(`Socket: ${this.client.getSocketPath()}`);
-    lines.push(`Available: ${this.client.isAvailable()}`);
-    try {
-      const snap = await this.client.snapshot();
-      lines.push(`Snapshot: OK (Agents: ${snap.agents.length}, Workspaces: ${snap.workspaces.length})`);
-      const convs = this.resolver.buildConversations(snap, folder);
-      lines.push(`Vault Conversations: ${convs.length}`);
-      for (const c of convs) {
-        lines.push(` - [${c.status}] ${c.label} (${c.tab_id} -> ${c.pane_id})`);
-      }
-    } catch (e: any) {
-      lines.push(`Snapshot failed: ${e.message}`);
-    }
-    new Notice(lines.join('\n'), 10000);
-  }
-
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -454,6 +446,10 @@ export default class HerdrCompanionPlugin extends Plugin {
     this.initClient();
     this.setupRefresh();
     this.refreshState();
+    const view = this.getTerminalView();
+    if (view) {
+      view.applyTheme();
+    }
   }
 }
 
@@ -472,7 +468,7 @@ class HerdrSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Focus On Blocked')
-      .setDesc('Bring terminal view / notify when an agent is blocked waiting for input.')
+      .setDesc('Bring terminal view and notify when an agent is blocked waiting for input.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.focusOnBlocked).onChange(async (val) => {
           this.plugin.settings.focusOnBlocked = val;
@@ -481,28 +477,43 @@ class HerdrSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Theme Mode')
+      .setDesc('Match Obsidian theme automatically or enforce dark/light colors for the terminal.')
+      .addDropdown((drop) =>
+        drop
+          .addOption('auto', 'Auto (Follow Obsidian)')
+          .addOption('dark', 'Dark')
+          .addOption('light', 'Light')
+          .setValue(this.plugin.settings.themeMode)
+          .onChange(async (val: 'auto' | 'dark' | 'light') => {
+            this.plugin.settings.themeMode = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Font Size')
+      .setDesc('Terminal font size in pixels.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(10, 24, 1)
+          .setValue(this.plugin.settings.fontSize)
+          .setDynamicTooltip()
+          .onChange(async (val) => {
+            this.plugin.settings.fontSize = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName('Herdr Session Name')
-      .setDesc('Leave blank to use the default session, or specify a named session.')
+      .setDesc('Leave blank to use the default desktop session, or specify a named session.')
       .addText((text) =>
         text
           .setPlaceholder('(default)')
           .setValue(this.plugin.settings.session)
           .onChange(async (val) => {
             this.plugin.settings.session = val.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName('Refresh Interval (seconds)')
-      .setDesc('How often to poll Herdr daemon state (in addition to push event socket).')
-      .addSlider((slider) =>
-        slider
-          .setLimits(1, 10, 1)
-          .setValue(this.plugin.settings.refreshIntervalSeconds)
-          .setDynamicTooltip()
-          .onChange(async (val) => {
-            this.plugin.settings.refreshIntervalSeconds = val;
             await this.plugin.saveSettings();
           })
       );

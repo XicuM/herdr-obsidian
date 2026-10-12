@@ -284,7 +284,7 @@
 	box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
 }
 
-/* Herdr Companion Obsidian View Styles */
+/* Herdr Companion Obsidian Integrated UI */
 .herdr-view-container {
   display: flex;
   flex-direction: column;
@@ -298,25 +298,27 @@
   display: flex;
   align-items: center;
   background-color: var(--background-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--divider-color, var(--border-color, rgba(127, 127, 127, 0.15)));
   overflow-x: auto;
   white-space: nowrap;
-  padding: 4px 6px;
-  gap: 4px;
+  padding: 3px 6px;
+  gap: 3px;
+  min-height: 34px;
 }
 
 .herdr-tab-item {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: var(--radius-s);
-  font-size: var(--font-ui-small);
-  background-color: var(--background-modifier-form-field);
+  padding: 4px 8px;
+  border-radius: var(--radius-s, 4px);
+  font-size: var(--font-ui-smaller, 12px);
+  background-color: transparent;
   color: var(--text-muted);
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
   gap: 6px;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
 .herdr-tab-item:hover {
@@ -326,37 +328,82 @@
 
 .herdr-tab-item.is-active {
   background-color: var(--background-primary);
-  color: var(--text-accent);
-  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+  border-color: var(--divider-color, var(--border-color, rgba(127, 127, 127, 0.2)));
   font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.herdr-tab-item.is-blocked {
-  color: var(--text-error);
-  font-weight: bold;
+/* Status dots */
+.herdr-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.herdr-status-dot.status-blocked {
+  background-color: var(--text-error, #f85149);
+  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.2);
+}
+
+.herdr-status-dot.status-working {
+  background-color: var(--text-accent, #58a6ff);
+  animation: herdr-pulse 1.8s infinite;
+}
+
+.herdr-status-dot.status-done {
+  background-color: var(--text-success, #3fb950);
+}
+
+.herdr-status-dot.status-idle {
+  background-color: var(--text-faint, #8b949e);
+  opacity: 0.6;
+}
+
+.herdr-status-dot.status-unknown {
+  background-color: var(--text-faint, #8b949e);
+  opacity: 0.4;
+}
+
+@keyframes herdr-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.herdr-tab-label {
+  cursor: pointer;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .herdr-tab-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  width: 16px;
-  height: 16px;
-  font-size: 12px;
+  border-radius: var(--radius-s, 3px);
+  width: 14px;
+  height: 14px;
+  font-size: 11px;
   color: var(--text-faint);
   cursor: pointer;
+  opacity: 0.7;
 }
 
 .herdr-tab-close:hover {
-  background-color: var(--background-modifier-error);
-  color: var(--text-on-accent);
+  opacity: 1;
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 .herdr-tab-bar-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin-left: auto;
   padding-left: 6px;
 }
@@ -366,8 +413,12 @@
   border: none;
   cursor: pointer;
   color: var(--text-muted);
-  padding: 4px 8px;
-  border-radius: var(--radius-s);
+  padding: 3px 6px;
+  border-radius: var(--radius-s, 4px);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .herdr-action-btn:hover {
@@ -380,7 +431,7 @@
   width: 100%;
   height: 100%;
   position: relative;
-  background-color: #000;
+  background-color: var(--background-primary);
   overflow: hidden;
 }
 
@@ -389,30 +440,21 @@
   padding: 4px;
 }
 
-.herdr-terminal-container .xterm-viewport {
-  overflow-y: auto;
-}
-
-.herdr-empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  gap: 12px;
-  color: var(--text-muted);
-}
-
 .herdr-status-bar {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+}
+
+.herdr-status-bar .herdr-status-dot {
+  width: 8px;
+  height: 8px;
 }
 
 .herdr-status-bar.is-blocked {
   color: var(--text-error);
-  font-weight: bold;
+  font-weight: 500;
 }
 
 .herdr-status-bar.is-working {

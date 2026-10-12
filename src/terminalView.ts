@@ -1,10 +1,10 @@
-import { ItemView, WorkspaceLeaf, Notice } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Menu } from 'obsidian';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Conversation } from './resolver';
 import { HerdrTerminalStream } from './terminalStream';
-import { statusEmoji } from './notifier';
-import { HARNESS_KINDS } from './herdrClient';
+import { getTerminalTheme } from './terminalTheme';
+import { RenameTabModal } from './renameModal';
 import type HerdrCompanionPlugin from './main';
 
 export const HERDR_VIEW_TYPE = 'herdr-companion-terminal-view';
@@ -20,6 +20,7 @@ export class HerdrTerminalView extends ItemView {
   private tabBarEl!: HTMLElement;
   private terminalContainerEl!: HTMLElement;
   private resizeObserver!: ResizeObserver;
+  private themeObserver!: MutationObserver;
 
   constructor(leaf: WorkspaceLeaf, plugin: HerdrCompanionPlugin) {
     super(leaf);
@@ -31,7 +32,7 @@ export class HerdrTerminalView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'Herdr Agents';
+    return 'Herdr';
   }
 
   getIcon(): string {
@@ -43,10 +44,7 @@ export class HerdrTerminalView extends ItemView {
     container.empty();
     container.addClass('herdr-view-container');
 
-    // Tab bar along the top
     this.tabBarEl = container.createDiv({ cls: 'herdr-tab-bar' });
-
-    // Terminal host container
     this.terminalContainerEl = container.createDiv({ cls: 'herdr-terminal-container' });
 
     this.initTerminal();
@@ -56,13 +54,21 @@ export class HerdrTerminalView extends ItemView {
     });
     this.resizeObserver.observe(this.terminalContainerEl);
 
-    // Initial render of tabs
+    // Watch Obsidian theme changes (light/dark toggle)
+    this.themeObserver = new MutationObserver(() => {
+      this.applyTheme();
+    });
+    this.themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
     this.renderTabs();
   }
 
   async onClose() {
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
+    }
+    if (this.themeObserver) {
+      this.themeObserver.disconnect();
     }
     this.detachStream();
     if (this.terminal) {
@@ -71,17 +77,20 @@ export class HerdrTerminalView extends ItemView {
     }
   }
 
+  public applyTheme() {
+    if (!this.terminal) return;
+    const theme = getTerminalTheme(this.plugin.settings.themeMode);
+    this.terminal.options.theme = theme;
+  }
+
   private initTerminal() {
+    const theme = getTerminalTheme(this.plugin.settings.themeMode);
+
     this.terminal = new Terminal({
       cursorBlink: true,
-      fontFamily: 'monospace',
-      fontSize: 13,
-      theme: {
-        background: '#141414',
-        foreground: '#e0e0e0',
-        cursor: '#f0f0f0',
-        selectionBackground: 'rgba(255, 255, 255, 0.3)'
-      },
+      fontFamily: 'var(--font-monospace)',
+      fontSize: this.plugin.settings.fontSize || 13,
+      theme,
       allowProposedApi: true
     });
 
@@ -119,8 +128,8 @@ export class HerdrTerminalView extends ItemView {
 
     const convs = this.plugin.getConversations();
 
-    // If there are conversations and none is active, pick the first one
-    if (convs.length > 0 && !this.currentTabId) {
+    // Auto-select first tab if none active
+    if (convs.length > 0 && (!this.currentTabId || !convs.some((c) => c.tab_id === this.currentTabId))) {
       this.currentTabId = convs[0].tab_id;
       this.currentPaneId = convs[0].pane_id;
       this.attachToPane(convs[0].pane_id);
@@ -132,19 +141,56 @@ export class HerdrTerminalView extends ItemView {
     }
 
     for (const c of convs) {
+      const isActive = c.tab_id === this.currentTabId;
       const tabEl = this.tabBarEl.createDiv({
-        cls: `herdr-tab-item ${c.tab_id === this.currentTabId ? 'is-active' : ''} ${c.status === 'blocked' ? 'is-blocked' : ''}`
+        cls: `herdr-tab-item ${isActive ? 'is-active' : ''}`
       });
 
-      const emoji = statusEmoji(c.status);
-      const prefix = emoji ? `${emoji} ` : '';
-      const titleSpan = tabEl.createSpan({ text: `${prefix}${c.label}` });
+      // Status dot
+      tabEl.createSpan({ cls: `herdr-status-dot status-${c.status}` });
 
+      // Tab label
+      const labelSpan = tabEl.createSpan({ cls: 'herdr-tab-label', text: c.label });
+      labelSpan.setAttribute('title', `${c.label} (${c.status})`);
+
+      // Tab selection
       tabEl.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).classList.contains('herdr-tab-close')) return;
         this.switchToTab(c);
       });
 
+      // Tab context menu (Rename, Close)
+      tabEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const menu = new Menu();
+        menu.addItem((item) => {
+          item.setTitle('Rename Tab')
+            .setIcon('pencil')
+            .onClick(() => {
+              new RenameTabModal(this.plugin.app, c.label, (newName) => {
+                this.plugin.renameConversationTab(c, newName);
+              }).open();
+            });
+        });
+        menu.addItem((item) => {
+          item.setTitle('Close Tab')
+            .setIcon('trash')
+            .onClick(() => {
+              this.plugin.closeConversationTab(c);
+            });
+        });
+        menu.showAtMouseEvent(e);
+      });
+
+      // Double-click to rename
+      labelSpan.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        new RenameTabModal(this.plugin.app, c.label, (newName) => {
+          this.plugin.renameConversationTab(c, newName);
+        }).open();
+      });
+
+      // Close button (x)
       const closeBtn = tabEl.createSpan({ cls: 'herdr-tab-close', text: '×' });
       closeBtn.setAttribute('title', 'Close tab');
       closeBtn.addEventListener('click', async (e) => {
@@ -153,17 +199,17 @@ export class HerdrTerminalView extends ItemView {
       });
     }
 
-    // Action buttons on the right of the tab bar
+    // Tab actions on the right (+, >_)
     const actionsEl = this.tabBarEl.createDiv({ cls: 'herdr-tab-bar-actions' });
 
     const newBtn = actionsEl.createEl('button', { cls: 'herdr-action-btn', text: '+' });
-    newBtn.setAttribute('title', 'Start new agent conversation');
+    newBtn.setAttribute('title', 'New agent conversation');
     newBtn.addEventListener('click', () => {
       this.plugin.promptNewConversation();
     });
 
     const shellBtn = actionsEl.createEl('button', { cls: 'herdr-action-btn', text: '>_' });
-    shellBtn.setAttribute('title', 'Open new shell tab');
+    shellBtn.setAttribute('title', 'New shell tab');
     shellBtn.addEventListener('click', () => {
       this.plugin.newShellTab();
     });
@@ -199,10 +245,8 @@ export class HerdrTerminalView extends ItemView {
 
     if (!this.terminal) return;
 
-    // Reset terminal display for new takeover session (like herdr-mobile)
     this.terminal.reset();
     this.terminal.write('\x1b[?1049h\x1b[0m\x1b[H\x1b[2J');
-    this.terminal.write(`\r\nConnecting to Herdr pane ${paneId}...\r\n`);
 
     this.handleResize();
     const cols = this.terminal.cols || 80;

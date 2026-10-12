@@ -1,6 +1,5 @@
 import { App, FuzzySuggestModal } from 'obsidian';
 import { Conversation } from './resolver';
-import { statusEmoji } from './notifier';
 import { HARNESS_KINDS } from './herdrClient';
 
 export interface ActionItem {
@@ -24,17 +23,15 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
   ) {
     super(app);
     this.onSelectAction = onSelectAction;
-    this.setPlaceholder(mode === 'close' ? 'Select a conversation tab to close...' : 'Switch Herdr agent tab or action...');
+    this.setPlaceholder(mode === 'close' ? 'Select a tab to close...' : 'Switch Herdr agent tab or action...');
 
     if (mode === 'close') {
       this.items = convs.map((c) => {
-        const emoji = statusEmoji(c.status);
-        const prefix = emoji ? `${emoji} ` : '';
         const shortTab = c.tab_id.includes(':t') ? c.tab_id.replace(/^.*:t/, 't') : c.tab_id;
         return {
           id: c.tab_id,
           type: 'close_conversation',
-          title: `Close: ${prefix}${c.label}`,
+          title: `Close: ${c.label}`,
           description: `Tab ${shortTab} (${c.status})`,
           conv: c
         };
@@ -50,13 +47,11 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
     });
 
     for (const c of sorted) {
-      const emoji = statusEmoji(c.status);
-      const prefix = emoji ? `${emoji} ` : '';
       const shortTab = c.tab_id.includes(':t') ? c.tab_id.replace(/^.*:t/, 't') : c.tab_id;
       this.items.push({
         id: c.tab_id,
         type: 'conversation',
-        title: `${prefix}${c.label}`,
+        title: c.label,
         description: `Tab ${shortTab} • [${c.status.toUpperCase()}]${c.status === 'blocked' ? ' (Waiting for input!)' : ''}`,
         conv: c
       });
