@@ -1,0 +1,19 @@
+.herdr-status-bar {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.herdr-status-bar.is-blocked {
+  color: var(--text-error);
+  font-weight: bold;
+}
+
+.herdr-status-bar.is-working {
+  color: var(--text-accent);
+}
+
+.herdr-status-bar.is-offline {
+  color: var(--text-muted);
+}
