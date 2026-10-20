@@ -10,6 +10,19 @@ Herdr is the terminal workspace manager for coding agents. This plugin puts the 
 
 > **Status:** desktop-only, pre-1.0, and not yet in the Obsidian community plugin directory.
 
+## Screenshots
+
+Notes and agents, side by side — the Herdr terminal sits in Obsidian's right sidebar while you edit:
+
+![Herdr terminal in the Obsidian sidebar](docs/herdr-sidebar.png)
+
+<details>
+<summary>Full-width terminal view</summary>
+
+![Herdr terminal as a full-width Obsidian tab](docs/herdr-main.png)
+
+</details>
+
 ## Requirements
 
 - [Obsidian](https://obsidian.md) 1.0+ on desktop
@@ -160,4 +173,4 @@ Inspired by [herdr-vscode](https://github.com/XicuM/herdr-vscode) and the Herdr 
 
 ## License
 
-[MIT](https://opensource.org/licenses/MIT)
+[MIT](LICENSE)
