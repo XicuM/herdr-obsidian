@@ -24,10 +24,16 @@ export class AgentAttender {
 
   handleStatusChange(paneId: string, status: AgentStatus) {
     const prev = this.last.get(paneId);
+    // First sighting: record baseline, never notify (prevents startup spam).
+    if (prev === undefined) {
+      this.last.set(paneId, status);
+      return;
+    }
     if (prev === status) return;
     this.last.set(paneId, status);
 
-    if (status === 'blocked' && this.cfg.focusOnBlocked) {
+    // Only notify on transition INTO blocked (working/idle/done/unknown -> blocked).
+    if (status === 'blocked' && prev !== 'blocked' && this.cfg.focusOnBlocked) {
       this.focusConversation(paneId);
     }
   }
