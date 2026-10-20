@@ -52,19 +52,21 @@ export class HerdrTerminalStream {
     }
 
     this.child.stdout.on('data', (chunk: Buffer) => {
+      if (this.isClosed) return;
       this.buffer += chunk.toString('utf8');
       const lines = this.buffer.split('\n');
       this.buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (!line.trim()) continue;
+        if (!line.trim() || this.isClosed) continue;
         try {
           const frame = JSON.parse(line);
           if (frame.type === 'terminal.closed') {
-            if (frame.reason) {
-              this.callbacks.onError(frame.reason);
-            }
+            const reason = frame.reason;
             this.close();
+            if (reason) {
+              this.callbacks.onError(reason);
+            }
             return;
           }
 
@@ -79,6 +81,7 @@ export class HerdrTerminalStream {
     });
 
     this.child.stderr.on('data', (chunk: Buffer) => {
+      if (this.isClosed) return;
       const errStr = chunk.toString('utf8');
       if (errStr.trim()) {
         this.callbacks.onError(errStr);
@@ -93,8 +96,13 @@ export class HerdrTerminalStream {
     });
 
     this.child.on('error', (err) => {
+      if (this.isClosed) return;
       this.callbacks.onError(`Process error: ${err.message}`);
     });
+  }
+
+  get isRunning(): boolean {
+    return !this.isClosed && !!this.child;
   }
 
   sendInput(data: string | Uint8Array) {
@@ -116,19 +124,36 @@ export class HerdrTerminalStream {
     this.child.stdin.write(msg);
   }
 
+  scroll(direction: 'up' | 'down', lines: number) {
+    if (!this.child || this.isClosed || !this.child.stdin.writable) return;
+    const count = Math.max(1, Math.round(lines));
+    const msg = JSON.stringify({
+      type: 'terminal.scroll',
+      direction,
+      lines: count
+    }) + '\n';
+    this.child.stdin.write(msg);
+  }
+
   close() {
     if (this.isClosed) return;
     this.isClosed = true;
-    if (this.child) {
-      if (this.child.stdin.writable) {
+    const child = this.child;
+    this.child = null;
+
+    if (child) {
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      if (child.stdin.writable) {
         try {
-          this.child.stdin.write(JSON.stringify({ type: 'terminal.release' }) + '\n');
-          this.child.stdin.end();
+          child.stdin.write(JSON.stringify({ type: 'terminal.release' }) + '\n');
+          child.stdin.end();
         } catch {}
       }
       setTimeout(() => {
         try {
-          this.child?.kill('SIGTERM');
+          child.kill('SIGTERM');
         } catch {}
       }, 300);
     }
