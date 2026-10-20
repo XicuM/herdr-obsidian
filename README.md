@@ -128,21 +128,19 @@ The embedded view attaches to a pane with `herdr terminal session control --take
 | Refresh interval | 2 s | Polling fallback; live socket events trigger refreshes regardless. Range 1–30 s. |
 | Font size | 14 px | Terminal font size. Range 8–32 px. |
 | Prefix dropped files with @ | On | Use each harness's mention syntax for dropped paths. Off inserts a plain quoted path. |
-| Herdr session name | *(blank)* | Connect to a named Herdr session instead of the default one. |
 
 ## How it works
 
-- **Transport.** The plugin talks JSON-RPC over Herdr's Unix socket: `~/.config/herdr/herdr.sock`, or `~/.config/herdr/sessions/<name>/herdr.sock` for a named session. `HERDR_SOCKET_PATH` overrides both.
+- **Transport.** The plugin talks JSON-RPC over Herdr's Unix socket for its dedicated session: `~/.config/herdr/sessions/herdr-obsidian/herdr.sock`. `HERDR_SOCKET_PATH` overrides this. Isolated in `herdr-obsidian`, agents and workspaces created from Obsidian never clutter the default Herdr session or Herdr Mobile.
 - **State.** It subscribes to `pane.*`, `tab.*`, and `workspace.*` events, with periodic polling as a fallback. Only tabs in the vault's workspace are shown.
 - **Terminal.** `herdr terminal session control <pane> --takeover` streams terminal frames over a child process; input, resize, scroll, and release are control messages on the same stream.
 - **Workspace.** Each vault maps to one Herdr workspace, found by pane `cwd` (with a label fallback) and created on demand.
 
 ## Troubleshooting
 
-- **Status bar says `Herdr (offline)`.** Start Herdr, or confirm the binary is on `PATH` and the session name matches.
+- **Status bar says `Herdr (offline)`.** Start Herdr, or confirm the binary is on `PATH`.
 - **Wrong or missing tabs.** Run **Herdr: Diagnose Herdr Connection**; it prints the socket path, workspace match, and up to ten tabs.
 - **`Terminal session taken over by another client`.** Another Herdr client grabbed the pane. Click the tab to re-attach.
-- **Named sessions.** Start the daemon with `herdr --session work server`, then set the same name in settings.
 - **Agent colors look wrong.** Run `/theme light` or `/theme dark` inside a long-running agent; it only reads the background on startup.
 
 ## Development

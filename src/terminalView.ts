@@ -270,7 +270,7 @@ export class HerdrTerminalView extends ItemView {
     this.applyTheme();
     this.handleResize();
     // Re-attach if the session changed, otherwise the stream keeps talking to the old socket.
-    if (this.currentPaneId && this.streamSession !== this.plugin.settings.session) {
+    if (this.currentPaneId && this.streamSession !== this.plugin.getSessionName()) {
       this.attachToPane(this.currentPaneId, true);
     }
   }
@@ -766,7 +766,7 @@ export class HerdrTerminalView extends ItemView {
       return;
     }
     this.currentPaneId = paneId;
-    this.streamSession = this.plugin.settings.session;
+    this.streamSession = this.plugin.getSessionName();
     this.streamErrored = false;
     this.wheelAccumulator = 0;
     this.detachStream();
@@ -780,7 +780,7 @@ export class HerdrTerminalView extends ItemView {
     const cols = this.terminal.cols || 80;
     const rows = this.terminal.rows || 24;
 
-    this.stream = new HerdrTerminalStream(paneId, this.plugin.settings.session, {
+    this.stream = new HerdrTerminalStream(paneId, this.plugin.getSessionName(), {
       onData: (data) => {
         this.terminal?.write(data);
       },

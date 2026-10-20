@@ -8,9 +8,10 @@ import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherMo
 import { HerdrTerminalView, HERDR_VIEW_TYPE } from './terminalView';
 import { RenameTabModal } from './renameModal';
 
+export const HERDR_OBSIDIAN_SESSION = 'herdr-obsidian';
+
 interface HerdrSettings {
   focusOnBlocked: boolean;
-  session: string;
   themeMode: 'auto' | 'dark' | 'light';
   fontSize: number;
   refreshIntervalSeconds: number;
@@ -20,7 +21,6 @@ interface HerdrSettings {
 
 const DEFAULT_SETTINGS: HerdrSettings = {
   focusOnBlocked: true,
-  session: '', // Default desktop session
   themeMode: 'auto', // Follow Obsidian theme
   fontSize: 14,
   refreshIntervalSeconds: 2,
@@ -175,7 +175,7 @@ export default class HerdrPlugin extends Plugin {
       } catch {}
       this.unsubscribeEvents = null;
     }
-    this.client = new HerdrClient(this.settings.session);
+    this.client = new HerdrClient(HERDR_OBSIDIAN_SESSION);
     this.resolver = new AgentResolver(this.client);
     if (this.attender) {
       this.attender.updateConfig(this.settings);
@@ -196,6 +196,10 @@ export default class HerdrPlugin extends Plugin {
       return adapter.getBasePath();
     }
     return os.homedir();
+  }
+
+  public getSessionName(): string {
+    return HERDR_OBSIDIAN_SESSION;
   }
 
   public getConversations(): Conversation[] {
@@ -646,19 +650,6 @@ class HerdrSettingTab extends PluginSettingTab {
           this.plugin.settings.addAtPrefixOnDrop = val;
           await this.plugin.saveSettings();
         })
-      );
-
-    new Setting(containerEl)
-      .setName('Herdr session name')
-      .setDesc('Leave blank to use the default desktop session, or specify a named session.')
-      .addText((text) =>
-        text
-          .setPlaceholder('(default)')
-          .setValue(this.plugin.settings.session)
-          .onChange(async (val) => {
-            this.plugin.settings.session = val.trim();
-            await this.plugin.saveSettings();
-          })
       );
   }
 }
