@@ -1,7 +1,7 @@
 {
   "name": "herdr-obsidian",
   "version": "0.1.0",
-  "description": "Herdr AI coding agent integration for Obsidian: status bar monitor, fast switcher, and focus-on-blocked.",
+  "description": "Herdr AI coding agents inside Obsidian: embedded terminal tabs, live status, and file drag-and-drop.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -15,6 +15,10 @@
   ],
   "author": "XicuM",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XicuM/herdr-obsidian.git"
+  },
   "devDependencies": {
     "@types/node": "^22.15.17",
     "esbuild": "^0.28.2",

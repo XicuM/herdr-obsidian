@@ -3,7 +3,7 @@
   "name": "Herdr Obsidian",
   "version": "0.1.0",
   "minAppVersion": "1.0.0",
-  "description": "Herdr AI coding agent integration for Obsidian: status bar monitor, fast switcher, and focus-on-blocked.",
+  "description": "Herdr AI coding agents inside Obsidian: embedded terminal tabs, live status, and file drag-and-drop.",
   "author": "XicuM",
   "authorUrl": "https://github.com/XicuM",
   "isDesktopOnly": true
