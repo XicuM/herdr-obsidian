@@ -1,8 +1,9 @@
-import { App, Modal, Setting } from 'obsidian';
+import { App, Modal, Setting, Notice } from 'obsidian';
 
 export class RenameTabModal extends Modal {
   private currentName: string;
   private onRename: (newName: string) => void;
+  private submitted = false;
 
   constructor(app: App, currentName: string, onRename: (newName: string) => void) {
     super(app);
@@ -23,13 +24,17 @@ export class RenameTabModal extends Modal {
         text.setValue(this.currentName).onChange((val) => {
           newName = val;
         });
+        text.inputEl.setAttribute('maxlength', '80');
         text.inputEl.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
             this.submit(newName);
           }
         });
-        setTimeout(() => text.inputEl.focus(), 20);
+        setTimeout(() => {
+          text.inputEl.focus();
+          text.inputEl.select();
+        }, 20);
       });
 
     new Setting(contentEl)
@@ -45,10 +50,18 @@ export class RenameTabModal extends Modal {
   }
 
   private submit(name: string) {
+    if (this.submitted) return;
     const trimmed = name.trim();
-    if (trimmed) {
-      this.onRename(trimmed);
+    if (!trimmed) {
+      new Notice('Tab name cannot be empty.');
+      return;
     }
+    if (trimmed === this.currentName.trim()) {
+      this.close();
+      return;
+    }
+    this.submitted = true;
+    this.onRename(trimmed);
     this.close();
   }
 

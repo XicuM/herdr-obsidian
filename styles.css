@@ -91,9 +91,7 @@
 }
 
 .xterm .xterm-viewport {
-    /* On OS X this is required in order for the scroll bar to appear fully opaque */
-    background-color: #000;
-    overflow-y: scroll;
+    overflow-y: auto;
     cursor: default;
     position: absolute;
     right: 0;
@@ -263,7 +261,7 @@
 	left: 3px;
 	height: 3px;
 	width: 100%;
-	box-shadow: var(--vscode-scrollbar-shadow, #000) 0 6px 6px -6px inset;
+	box-shadow: var(--background-modifier-box-shadow, rgba(0, 0, 0, 0.3)) 0 6px 6px -6px inset;
 }
 .xterm .xterm-scrollable-element > .shadow.left {
 	display: block;
@@ -271,7 +269,7 @@
 	left: 0;
 	height: 100%;
 	width: 3px;
-	box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
+	box-shadow: var(--background-modifier-box-shadow, rgba(0, 0, 0, 0.3)) 6px 0 6px -6px inset;
 }
 .xterm .xterm-scrollable-element > .shadow.top-left-corner {
 	display: block;
@@ -281,10 +279,23 @@
 	width: 3px;
 }
 .xterm .xterm-scrollable-element > .shadow.top.left {
-	box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
+	box-shadow: var(--background-modifier-box-shadow, rgba(0, 0, 0, 0.3)) 6px 0 6px -6px inset;
 }
 
-/* Herdr Companion Obsidian Integrated UI */
+/* Herdr Obsidian Integrated UI - Full-bleed edge-to-edge layout */
+/* Kill Obsidian & theme leaf padding, margins, card radii, and readable-width caps */
+.workspace-leaf:has([data-type="herdr-obsidian-terminal-view"]),
+.workspace-leaf-content[data-type="herdr-obsidian-terminal-view"],
+.workspace-leaf-content[data-type="herdr-obsidian-terminal-view"] .view-content {
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
 .herdr-view-container {
   display: flex;
   flex-direction: column;
@@ -292,138 +303,383 @@
   width: 100%;
   background-color: var(--background-primary);
   overflow: hidden;
+  padding: 0;
+  margin: 0;
 }
 
 .herdr-tab-bar {
-  display: flex;
-  align-items: center;
-  background-color: var(--background-secondary);
-  border-bottom: 1px solid var(--divider-color, var(--border-color, rgba(127, 127, 127, 0.15)));
-  overflow-x: auto;
-  white-space: nowrap;
-  padding: 3px 6px;
-  gap: 3px;
-  min-height: 34px;
+  display: flex !important;
+  align-items: flex-end;
+  background-color: var(--tab-container-background, var(--background-secondary));
+  height: var(--header-height, 40px);
+  min-height: var(--header-height, 40px);
+  max-height: var(--header-height, 40px);
+  border-bottom: 1px solid var(--tab-outline-color, var(--divider-color, var(--background-modifier-border)));
+  box-sizing: border-box;
+  flex-shrink: 0;
+  padding: 0 4px 0 0;
+  margin: 0;
+  position: relative;
+  z-index: 1;
+  width: 100%;
 }
 
+/* Tab list wrapper inside header container */
+.herdr-tab-list {
+  display: flex !important;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: clip;
+  overflow-clip-margin: calc(var(--tab-curve, 10px) * 2);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  white-space: nowrap;
+  gap: 0;
+  margin: 0 0 -1px 0;
+  padding: 0 6px 0 10px;
+}
+
+.herdr-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tab item: mimics Obsidian note tabs */
 .herdr-tab-item {
-  display: inline-flex;
+  -webkit-app-region: no-drag;
+  display: flex !important;
   align-items: center;
-  padding: 4px 8px;
-  border-radius: var(--radius-s, 4px);
-  font-size: var(--font-ui-smaller, 12px);
-  background-color: transparent;
-  color: var(--text-muted);
+  position: relative;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 48px;
+  max-width: var(--tab-max-width, 220px);
+  height: 35px;
+  padding: 1px 3px 3px;
+  box-sizing: border-box;
+  border-radius: var(--tab-radius-active, 8px 8px 0 0);
+  color: var(--tab-text-color, var(--text-muted));
   cursor: pointer;
   user-select: none;
-  border: 1px solid transparent;
-  gap: 6px;
-  transition: background-color 0.1s ease, color 0.1s ease;
+  background-color: transparent;
+  border: none !important;
+  margin: 0;
+  text-align: center;
+  font-size: var(--tab-font-size, var(--font-ui-small, 13px));
+  font-weight: var(--tab-font-weight, 400);
+  transition: color 100ms ease;
 }
 
-.herdr-tab-item:hover {
-  background-color: var(--background-modifier-hover);
-  color: var(--text-normal);
+.herdr-tab-item:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: -2px;
 }
 
+/* Tab drag and drop reordering */
+.herdr-tab-item.is-dragging {
+  opacity: 0.35;
+  cursor: grabbing;
+}
+
+/* Vertical line drop indicator via pseudo-element, matching Obsidian native tab drag */
+.herdr-tab-item.drop-target-left::before,
+.herdr-tab-item.drop-target-right::after {
+  content: '' !important;
+  display: block !important;
+  position: absolute !important;
+  top: 15%;
+  width: 2px !important;
+  height: 70%;
+  background-color: var(--interactive-accent, var(--color-accent, var(--text-accent))) !important;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10 !important;
+  /* Reset scoop curve properties that ::before/::after inherit from is-active */
+  box-shadow: none !important;
+  clip-path: none !important;
+  border-radius: 1px !important;
+  border: none !important;
+}
+
+.herdr-tab-item.drop-target-left::before {
+  left: -1px;
+  right: auto !important;
+  bottom: auto;
+}
+
+.herdr-tab-item.drop-target-right::after {
+  right: -1px;
+  left: auto !important;
+  bottom: auto;
+}
+
+/* Active tab: raised with matching background and outline, connects seamlessly below */
 .herdr-tab-item.is-active {
-  background-color: var(--background-primary);
-  color: var(--text-normal);
-  border-color: var(--divider-color, var(--border-color, rgba(127, 127, 127, 0.2)));
-  font-weight: 500;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  background-color: var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary))) !important;
+  color: var(--tab-text-color-active, var(--text-normal)) !important;
+  box-shadow: 0 -1px 0 0 var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
+              -1px 0 0 0 var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
+              1px 0 0 0 var(--tab-outline-color, var(--divider-color, var(--background-modifier-border)));
+  border: none !important;
+  border-radius: var(--tab-radius-active, 8px 8px 0 0) !important;
+  z-index: 2;
+  margin-bottom: -1px;
 }
 
-/* Status dots */
+/* Obsidian's signature scooped bottom curves on active tab */
+.herdr-tab-item.is-active::before,
+.herdr-tab-item.is-active::after {
+  content: '';
+  display: block !important;
+  position: absolute;
+  bottom: 0;
+  width: calc(var(--tab-curve, 10px) * 2);
+  height: calc(var(--tab-curve, 10px) * 2);
+  border-radius: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.herdr-tab-item.is-active::before {
+  left: calc(var(--tab-curve, 10px) * -2);
+  clip-path: inset(50% calc(var(--tab-curve, 10px) * -1) 0 50%);
+  box-shadow: inset 0 0 0 1px var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
+              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary)));
+}
+
+.herdr-tab-item.is-active::after {
+  right: calc(var(--tab-curve, 10px) * -2);
+  clip-path: inset(50% 50% 0 calc(var(--tab-curve, 10px) * -1));
+  box-shadow: inset 0 0 0 1px var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
+              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary)));
+}
+
+/* Inner tab container */
+.herdr-tab-inner {
+  align-items: center;
+  display: flex !important;
+  gap: 6px;
+  height: 100%;
+  width: 100%;
+  padding: 0 8px 0 9px;
+  box-sizing: border-box;
+  position: relative;
+  border-radius: var(--tab-radius, var(--radius-s, 4px));
+  background-color: var(--tab-inner-background, transparent);
+  border: var(--tab-inner-border-width, 0px) solid var(--tab-inner-border-color, transparent);
+  transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.herdr-tab-item.is-active .herdr-tab-inner {
+  background-color: var(--tab-inner-background-active, transparent) !important;
+  border-color: var(--tab-inner-border-color-active, transparent) !important;
+}
+
+/* Inactive background tab hover & focus: exact native Obsidian pill highlight */
+.herdr-tab-item:not(.is-active):hover {
+  background-color: transparent !important;
+  color: var(--tab-text-color-focused, var(--text-normal));
+}
+
+.herdr-tab-item:not(.is-active):hover .herdr-tab-inner,
+.herdr-tab-item:not(.is-active) .herdr-tab-inner:hover,
+.herdr-tab-item:not(.is-active):focus-visible .herdr-tab-inner,
+.herdr-tab-item:not(.is-active).mobile-tap .herdr-tab-inner {
+  background-color: var(--tab-inner-background-hover, var(--background-modifier-hover, rgba(255, 255, 255, 0.08))) !important;
+  border-color: var(--tab-inner-border-color-hover, transparent);
+  color: var(--tab-text-color-focused, var(--text-normal));
+}
+
+.herdr-tab-item:not(.is-active):hover .herdr-tab-label,
+.herdr-tab-item:not(.is-active) .herdr-tab-inner:hover .herdr-tab-label,
+.herdr-tab-item:not(.is-active):focus-visible .herdr-tab-label {
+  color: var(--tab-text-color-focused, var(--text-normal)) !important;
+}
+
+.herdr-tab-item:not(.is-active):hover .herdr-tab-close,
+.herdr-tab-item:not(.is-active) .herdr-tab-inner:hover .herdr-tab-close,
+.herdr-tab-item:not(.is-active):focus-visible .herdr-tab-close {
+  opacity: 0.7;
+  pointer-events: auto;
+}
+
+/* Subtle, vertically-centered divider tick between inactive tabs */
+.herdr-tab-item:not(.is-active):not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: -0.5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 12px;
+  background-color: var(--tab-outline-color, var(--divider-color, var(--background-modifier-border)));
+  opacity: 0.4;
+  transition: opacity 100ms ease;
+  pointer-events: none;
+}
+
+.herdr-tab-item:hover::after,
+.herdr-tab-item:has(+ .herdr-tab-item:hover)::after,
+.herdr-tab-item:has(+ .herdr-tab-item.is-active)::after {
+  opacity: 0;
+}
+
+/* Status icon wrapper */
+.herdr-tab-status {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Status dots: color + border-style redundancy so state isn't color-only.
+   blocked = solid + glow ring, working = pulsing, done = solid,
+   idle = hollow, unknown = dashed hollow. */
 .herdr-status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   display: inline-block;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .herdr-status-dot.status-blocked {
-  background-color: var(--text-error, #f85149);
-  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.2);
+  background-color: #f38ba8;
+  border: 1.5px solid #f38ba8;
+  box-shadow: 0 0 0 2px rgba(243, 139, 168, 0.25);
 }
 
 .herdr-status-dot.status-working {
-  background-color: var(--text-accent, #58a6ff);
+  background-color: #f9e2af;
+  border: 1.5px solid #f9e2af;
   animation: herdr-pulse 1.8s infinite;
 }
 
 .herdr-status-dot.status-done {
-  background-color: var(--text-success, #3fb950);
+  background-color: #a6e3a1;
+  border: 1.5px solid #a6e3a1;
 }
 
 .herdr-status-dot.status-idle {
-  background-color: var(--text-faint, #8b949e);
-  opacity: 0.6;
+  background-color: transparent;
+  border: 1.5px solid #6c7086;
 }
 
 .herdr-status-dot.status-unknown {
-  background-color: var(--text-faint, #8b949e);
-  opacity: 0.4;
+  background-color: transparent;
+  border: 1.5px dashed #6c7086;
 }
 
 @keyframes herdr-pulse {
   0% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 0.45; transform: scale(0.85); }
   100% { opacity: 1; transform: scale(1); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .herdr-status-dot.status-working {
+    animation: none;
+  }
+}
+
+/* Tab label: native Obsidian font and truncation */
 .herdr-tab-label {
-  cursor: pointer;
-  max-width: 140px;
+  flex: 1 1 auto;
+  font-size: var(--tab-font-size, var(--font-ui-small, 13px));
+  font-weight: var(--tab-font-weight, 400);
   overflow: hidden;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.4;
+  display: block !important;
 }
 
+/* Tab close button: native Obsidian note tab behavior (visible on active or hover) */
 .herdr-tab-close {
-  display: inline-flex;
+  display: flex !important;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-s, 3px);
-  width: 14px;
-  height: 14px;
-  font-size: 11px;
-  color: var(--text-faint);
-  cursor: pointer;
+  cursor: var(--cursor, pointer);
+  padding: 0;
+  border-radius: var(--radius-s, 4px);
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  color: var(--tab-text-color, var(--text-muted));
+  background: transparent;
+  border: none;
+  margin-inline-start: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease, background-color 100ms ease, color 100ms ease;
+}
+
+.herdr-tab-close .svg-icon {
+  margin-right: 0 !important;
+  width: 13px;
+  height: 13px;
+  stroke-width: 2px;
+}
+
+.herdr-tab-item.is-active .herdr-tab-close {
   opacity: 0.7;
+  pointer-events: auto;
+  color: var(--tab-text-color-focused-active, var(--text-normal));
 }
 
-.herdr-tab-close:hover {
-  opacity: 1;
-  background-color: var(--background-modifier-hover);
-  color: var(--text-normal);
+@media (hover: hover) {
+  .herdr-tab-item:hover .herdr-tab-close {
+    opacity: 0.7;
+    pointer-events: auto;
+  }
+  .herdr-tab-close:hover {
+    opacity: 1 !important;
+    background-color: var(--background-modifier-hover);
+    color: var(--tab-text-color-focused-active-current, var(--text-normal));
+  }
 }
 
-.herdr-tab-bar-actions {
-  display: flex;
+/* Tab action on the right: native new-tab button with Lucide plus placed directly next to tabs */
+.herdr-tab-actions {
+  display: flex !important;
   align-items: center;
-  gap: 2px;
-  margin-left: auto;
-  padding-left: 6px;
+  align-self: center;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+  padding: 0;
 }
 
 .herdr-action-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-muted);
-  padding: 3px 6px;
-  border-radius: var(--radius-s, 4px);
-  font-size: 13px;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--radius-s, 4px);
+  color: var(--icon-color, var(--text-muted));
+  cursor: var(--cursor, pointer);
+  background: transparent;
+  border: none;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.herdr-action-btn .svg-icon {
+  margin-right: 0 !important;
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
 }
 
 .herdr-action-btn:hover {
-  color: var(--text-normal);
   background-color: var(--background-modifier-hover);
+  color: var(--icon-color-hover, var(--text-normal));
 }
 
 .herdr-terminal-container {
@@ -431,13 +687,38 @@
   width: 100%;
   height: 100%;
   position: relative;
-  background-color: var(--background-primary);
+  z-index: 2;
+  background-color: var(--herdr-tab-bg, var(--background-primary)) !important;
   overflow: hidden;
+}
+
+.herdr-terminal-container.herdr-drop-active {
+  outline: 2px dashed var(--text-accent);
+  outline-offset: -2px;
 }
 
 .herdr-terminal-container .xterm {
   height: 100%;
-  padding: 4px;
+  width: 100%;
+  padding: 0 !important;
+  box-sizing: border-box;
+  background-color: var(--herdr-tab-bg, var(--background-primary)) !important;
+}
+
+.herdr-terminal-container .xterm-viewport {
+  overflow-y: hidden !important;
+  scrollbar-width: none !important;
+  background-color: var(--herdr-tab-bg, var(--background-primary)) !important;
+}
+
+.herdr-terminal-container .xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.herdr-terminal-container .xterm-screen {
+  background-color: var(--herdr-tab-bg, var(--background-primary)) !important;
 }
 
 .herdr-status-bar {
@@ -445,6 +726,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .herdr-status-bar .herdr-status-dot {
@@ -463,4 +748,26 @@
 
 .herdr-status-bar.is-offline {
   color: var(--text-muted);
+}
+
+.herdr-tab-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 30px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 12px);
+  white-space: nowrap;
+}
+
+.herdr-empty-btn {
+  margin-left: 4px;
+  font-size: var(--font-ui-smaller, 12px);
+  padding: 2px 8px;
+}
+
+.herdr-empty-btn:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
 }

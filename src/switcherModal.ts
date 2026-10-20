@@ -1,14 +1,13 @@
 import { App, FuzzySuggestModal } from 'obsidian';
-import { Conversation } from './resolver';
+import { Conversation, compareConversationsByStatus } from './resolver';
 import { HARNESS_KINDS } from './herdrClient';
 
 export interface ActionItem {
   id: string;
-  type: 'conversation' | 'new_conversation' | 'new_shell' | 'refresh' | 'close_conversation';
+  type: 'conversation' | 'new_shell' | 'refresh' | 'close_conversation';
   title: string;
   description: string;
   conv?: Conversation;
-  harnessKind?: string;
 }
 
 export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
@@ -27,32 +26,25 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
 
     if (mode === 'close') {
       this.items = convs.map((c) => {
-        const shortTab = c.tab_id.includes(':t') ? c.tab_id.replace(/^.*:t/, 't') : c.tab_id;
         return {
           id: c.tab_id,
           type: 'close_conversation',
-          title: `Close: ${c.label}`,
-          description: `Tab ${shortTab} (${c.status})`,
+          title: `Close ${c.label}`,
+          description: `${c.agent ? c.agent + ' • ' : ''}${c.status}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
           conv: c
         };
       });
       return;
     }
 
-    const statusPriority: Record<string, number> = { blocked: 0, working: 1, done: 2, idle: 3, unknown: 4 };
-    const sorted = [...convs].sort((a, b) => {
-      const prioDiff = (statusPriority[a.status] ?? 5) - (statusPriority[b.status] ?? 5);
-      if (prioDiff !== 0) return prioDiff;
-      return a.label.localeCompare(b.label);
-    });
+    const sorted = [...convs].sort(compareConversationsByStatus);
 
     for (const c of sorted) {
-      const shortTab = c.tab_id.includes(':t') ? c.tab_id.replace(/^.*:t/, 't') : c.tab_id;
       this.items.push({
         id: c.tab_id,
         type: 'conversation',
         title: c.label,
-        description: `Tab ${shortTab} • [${c.status.toUpperCase()}]${c.status === 'blocked' ? ' (Waiting for input!)' : ''}`,
+        description: `${c.agent ? c.agent + ' • ' : ''}${c.status.toUpperCase()}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
         conv: c
       });
     }
@@ -61,19 +53,13 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
       {
         id: '__shell__',
         type: 'new_shell',
-        title: '💻 New Shell Tab',
+        title: 'New shell tab',
         description: 'Open a plain shell tab in this vault workspace'
-      },
-      {
-        id: '__new__',
-        type: 'new_conversation',
-        title: '➕ New Agent Conversation...',
-        description: 'Start an AI coding agent in a new tab'
       },
       {
         id: '__refresh__',
         type: 'refresh',
-        title: '🔄 Refresh Herdr Status',
+        title: 'Refresh Herdr status',
         description: 'Query Herdr daemon for latest state'
       }
     );

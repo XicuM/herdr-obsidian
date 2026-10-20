@@ -11,6 +11,20 @@ export interface Conversation {
   running: boolean;
 }
 
+export const STATUS_PRIORITY: Record<string, number> = {
+  blocked: 0,
+  working: 1,
+  done: 2,
+  idle: 3,
+  unknown: 4
+};
+
+export function compareConversationsByStatus(a: Conversation, b: Conversation): number {
+  const prioDiff = (STATUS_PRIORITY[a.status] ?? 5) - (STATUS_PRIORITY[b.status] ?? 5);
+  if (prioDiff !== 0) return prioDiff;
+  return a.label.localeCompare(b.label);
+}
+
 export class AgentResolver {
   constructor(private client: HerdrClient) {}
 
