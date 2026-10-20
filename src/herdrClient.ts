@@ -7,21 +7,21 @@ import { spawn } from 'child_process';
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
 export const HARNESS_KINDS = [
-  'opencode',
+  'agy',
+  'amp',
   'claude',
   'codex',
   'copilot',
+  'cursor',
+  'devin',
   'gemini',
-  'agy',
   'grok',
   'kimi',
   'kiro',
-  'qwen',
-  'cursor',
-  'devin',
   'maki',
+  'opencode',
   'pi',
-  'amp'
+  'qwen'
 ] as const;
 export type HarnessKind = (typeof HARNESS_KINDS)[number];
 
@@ -142,7 +142,7 @@ export class HerdrClient {
     return this.isAvailable();
   }
 
-  private async rawRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  private async rawRequest(method: string, params: Record<string, unknown> = {}, timeoutMs = 15000): Promise<any> {
     const sockPath = this.getSocketPath();
     if (!fs.existsSync(sockPath)) {
       await this.ensureServerRunning();
@@ -164,14 +164,13 @@ export class HerdrClient {
         else resolve(data);
       };
 
-      socket.setTimeout(15000);
+      socket.setTimeout(timeoutMs);
       socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
       socket.on('error', (e) => done(e));
       socket.on('data', (d) => {
         buf += d.toString('utf8');
         const lines = buf.split('\n');
-        const full = buf;
-        if (full.includes(`"${id}"`)) {
+        if (buf.includes(`"${id}"`)) {
           try {
             const last = lines
               .filter((l) => l.includes(`"${id}"`))
@@ -231,8 +230,18 @@ export class HerdrClient {
     return r.panes as any[];
   }
 
-  async createTab(workspaceId: string, label?: string | null, focus = false): Promise<{ tab: Tab; root_pane: any }> {
-    const r = await this.call('tab.create', { workspace_id: workspaceId, label, focus });
+  async createTab(
+    workspaceId: string,
+    label?: string | null,
+    focus = false,
+    env?: Record<string, string>
+  ): Promise<{ tab: Tab; root_pane: any }> {
+    const r = await this.call('tab.create', {
+      workspace_id: workspaceId,
+      label,
+      focus,
+      ...(env ? { env } : {})
+    });
     return r;
   }
 
@@ -310,42 +319,7 @@ export class HerdrClient {
     params: Record<string, unknown>,
     timeoutMs: number
   ): Promise<any> {
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
-    const resp = await new Promise<any>((resolve, reject) => {
-      if (!fs.existsSync(sockPath)) {
-        return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
-      }
-      const socket = net.createConnection(sockPath);
-      const id = `obsidian:${Math.random().toString(36).slice(2)}`;
-      let buf = '';
-      let settled = false;
-      const done = (err: Error | null, data?: any) => {
-        if (settled) return;
-        settled = true;
-        socket.end();
-        if (err) reject(err);
-        else resolve(data);
-      };
-      socket.setTimeout(timeoutMs);
-      socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
-      socket.on('error', (e) => done(e));
-      socket.on('data', (d) => {
-        buf += d.toString('utf8');
-        const lines = buf.split('\n');
-        if (buf.includes(`"${id}"`)) {
-          try {
-            const last = lines.filter((l) => l.includes(`"${id}"`)).pop();
-            done(null, JSON.parse(last!));
-          } catch {
-            /* keep buffering */
-          }
-        }
-      });
-      socket.write(JSON.stringify({ id, method, params }) + '\n');
-    });
+    const resp = await this.rawRequest(method, params, timeoutMs);
     if (resp.error) {
       throw new Error(resp.error.message || `${method} failed`);
     }
