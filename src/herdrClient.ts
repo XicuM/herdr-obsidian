@@ -70,10 +70,11 @@ export interface Snapshot {
   version?: string;
 }
 
-/** What herdr-bridge pushes on `/ws/session`: each new snapshot (wrapped in herdr's reply), or why there is none. */
+/** What herdr-bridge pushes on `/ws/session`: each new snapshot (wrapped in herdr's reply), why there is none, or an agent asking to show a note. */
 export type BridgeEvent =
   | { type: 'snapshot'; data: Snapshot & { snapshot?: Snapshot } }
-  | { type: 'error'; error: string };
+  | { type: 'error'; error: string }
+  | { type: 'open'; vault?: string; path: string; heading?: string; line?: number };
 
 export interface HerdrClientOptions {
   host: string;

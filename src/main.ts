@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
+import { App, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { TerminalStream, TerminalStreamCallbacks } from './terminalStream';
 import { VaultSync, SyncLedger } from './vaultSync';
@@ -22,6 +22,8 @@ export interface HerdrSettings {
   bridgeToken: string;
   autoSyncOnOpen: boolean;
   syncLedger?: SyncLedger;
+  allowAgentOpen: boolean;
+  agentSkillOffered: boolean;
 }
 
 const DEFAULT_SETTINGS: HerdrSettings = {
@@ -33,8 +35,20 @@ const DEFAULT_SETTINGS: HerdrSettings = {
   bridgeHost: '',
   bridgeToken: '',
   autoSyncOnOpen: true,
-  syncLedger: {}
+  syncLedger: {},
+  allowAgentOpen: true,
+  agentSkillOffered: false
 };
+
+const AGENT_SKILL_PATH = '.claude/skills/herdr-open/SKILL.md';
+const AGENT_SKILL = `---
+name: herdr-open
+description: Show a note, heading or line to the user in their Obsidian window. Use when pointing at a note instead of pasting it.
+---
+
+Run \`herdr-bridge obsidian open <path>[#heading] [--line N]\`, with the path relative to your working directory.
+Use it to show what you found or changed. Never use \`mv\` to rename notes: it breaks wikilinks.
+`;
 
 export default class HerdrPlugin extends Plugin {
   settings: HerdrSettings = DEFAULT_SETTINGS;
@@ -194,9 +208,16 @@ export default class HerdrPlugin extends Plugin {
     });
     this.syncRibbonEl = this.addRibbonIcon('refresh-cw', 'Sync vault with laptop', () => void this.syncVault(true));
 
+    this.addCommand({
+      id: 'install-agent-skill',
+      name: 'Install agent skill (let agents open notes)',
+      callback: () => void this.installAgentSkill()
+    });
+
     this.addSettingTab(new HerdrSettingTab(this.app, this));
 
     this.connect();
+    this.app.workspace.onLayoutReady(() => this.offerAgentSkill());
 
     if (Platform.isMobile) {
       // In the background a phone streams nothing; it reconnects on return.
@@ -328,6 +349,38 @@ export default class HerdrPlugin extends Plugin {
     return null;
   }
 
+  /** An agent asked to show a note. Only existing files inside the vault open: nothing is created. */
+  private async openForAgent(path: string, heading?: string, line?: number) {
+    if (!this.settings.allowAgentOpen) return;
+    const clean = normalizePath(path);
+    const file = clean.split('/').includes('..') ? null : this.app.vault.getFileByPath(clean);
+    if (!file) {
+      new Notice(`Herdr: an agent asked to open "${path}", which is not in this vault.`);
+      return;
+    }
+    const target = heading ? `${clean}#${heading}` : clean;
+    await this.app.workspace.openLinkText(target, '', false, line === undefined ? undefined : { eState: { line } });
+  }
+
+  /** Writes the agent skill into the vault. Needs herdr-bridge on this machine: a phone's vault syncs without dotfolders. */
+  public async installAgentSkill() {
+    const adapter = this.app.vault.adapter;
+    await adapter.mkdir(normalizePath(AGENT_SKILL_PATH.replace(/\/[^/]+$/, '')));
+    await adapter.write(normalizePath(AGENT_SKILL_PATH), AGENT_SKILL);
+    new Notice('Herdr: agent skill installed. Agents can now open notes here.');
+  }
+
+  /** Once per vault, asks before writing into it. */
+  private offerAgentSkill() {
+    if (this.settings.agentSkillOffered || this.isRemoteBridge() || !this.settings.allowAgentOpen) return;
+    this.settings.agentSkillOffered = true;
+    void this.saveSettings();
+    const frag = createFragment();
+    frag.createSpan({ text: 'Herdr: let agents open notes in Obsidian? ' });
+    frag.createEl('button', { text: 'Install skill' }).addEventListener('click', () => void this.installAgentSkill());
+    new Notice(frag, 15000);
+  }
+
   private subscribeEvents() {
     const connection = this.connection;
     this.client
@@ -335,6 +388,7 @@ export default class HerdrPlugin extends Plugin {
         // The bridge pushes each new snapshot, wrapped in herdr's reply, or why there is none.
         if (evt.type === 'snapshot') void this.applySnapshot(evt.data.snapshot || evt.data);
         else if (evt.type === 'error') this.updateStatusBar([], false);
+        else if (evt.type === 'open' && (!evt.vault || evt.vault === this.app.vault.getName())) void this.openForAgent(evt.path, evt.heading, evt.line);
       })
       .then((unsub) => {
         if (connection !== this.connection) unsub();
@@ -740,6 +794,16 @@ class HerdrSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(settings.addAtPrefixOnDrop).onChange(async (val) => {
           settings.addAtPrefixOnDrop = val;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Let agents open notes')
+      .setDesc('Agents can ask Obsidian to show a note, heading or line from this vault with herdr-bridge open.')
+      .addToggle((toggle) =>
+        toggle.setValue(settings.allowAgentOpen).onChange(async (val) => {
+          settings.allowAgentOpen = val;
           await this.plugin.saveSettings();
         })
       );

@@ -292,3 +292,32 @@ describe('vault workspace', () => {
     expect(plugin.singletonWorkspaceId).toBe('w9');
   });
 });
+
+describe('agent open requests', () => {
+  beforeEach(() => {
+    plugin.app.vault.getFileByPath = (p: string) => (p === 'a/Note.md' ? { path: p } : null);
+    plugin.app.workspace.openLinkText = vi.fn(async () => {});
+  });
+
+  it('opens an existing note at a heading and line', async () => {
+    await plugin.openForAgent('a/Note.md', 'Intro', 7);
+    expect(plugin.app.workspace.openLinkText).toHaveBeenCalledWith('a/Note.md#Intro', '', false, { eState: { line: 7 } });
+  });
+
+  it('refuses missing files, parent paths and a disabled setting', async () => {
+    await plugin.openForAgent('nope.md');
+    await plugin.openForAgent('../a/Note.md');
+    plugin.settings.allowAgentOpen = false;
+    await plugin.openForAgent('a/Note.md');
+    expect(plugin.app.workspace.openLinkText).not.toHaveBeenCalled();
+    expect(notices).toHaveLength(2);
+  });
+
+  it('installs the skill inside the vault', async () => {
+    const adapter = { mkdir: vi.fn(async () => {}), write: vi.fn(async () => {}) };
+    plugin.app.vault.adapter = adapter;
+    await plugin.installAgentSkill();
+    expect(adapter.mkdir).toHaveBeenCalledWith('.claude/skills/herdr-open');
+    expect(adapter.write.mock.calls[0][0]).toBe('.claude/skills/herdr-open/SKILL.md');
+  });
+});

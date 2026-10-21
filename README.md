@@ -90,6 +90,10 @@ Dragging selected text inserts it directly, and multiline text is wrapped in bra
 - New tabs created by the plugin launch with `COLORFGBG` set for light or dark mode, so tools that read it (Claude Code, Vim, and friends) paint the right palette on the first frame.
 - Already-running agents keep their palette; run `/theme light` or `/theme dark` inside them after switching Obsidian's theme.
 
+### Agents open notes in Obsidian
+
+The bridge can push `{"type":"open","vault":"Notes","path":"Note.md","heading":"Intro","line":7}` on `/ws/session`; the plugin then opens that note in Obsidian. Only existing files inside the vault open, and **Let agents open notes** turns it off. On first start with a local bridge, the plugin offers to write `.claude/skills/herdr-open/SKILL.md` (also **Install agent skill**), which tells agents to run `herdr-bridge obsidian open <path>[#heading] [--line N]`. It needs a herdr-bridge with `obsidian open` (herdr-mobile, `POST /api/obsidian/open`); the event carries the vault's name, and other vaults ignore it.
+
 ### Vault sync (with a bridge on another machine)
 
 With herdr-bridge on another machine, e.g. your laptop seen from your phone, the plugin syncs this vault with that machine's Obsidian vault of the same name (looked up in Obsidian's vault list there, so any number of vaults work with no setup). Sync from the ribbon icon, the **Sync vault with laptop** command, or automatically on open.
@@ -149,6 +153,7 @@ The embedded view takes over a pane while it is attached; other herdr clients st
 | Theme mode | Follow Obsidian | Follow Obsidian, or force the terminal's dark/light palette. |
 | Font size | 14 px | Terminal font size. Range 8–32 px. |
 | Prefix dropped files with @ | On | Use each harness's mention syntax for dropped paths. Off inserts a plain quoted path. |
+| Let agents open notes | On | Open notes when an agent asks through herdr-bridge. |
 | Bridge host | `127.0.0.1:7788` | `host:port` of herdr-bridge. On a phone, the laptop's address (e.g. its Tailscale IP). |
 | Bridge token | — | From `herdr-bridge --print-token`. |
 | Sync on open | On | Sync the vault when Obsidian opens (only with a bridge on another machine). |
