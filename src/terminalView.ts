@@ -246,11 +246,19 @@ export class HerdrTerminalView extends ItemView {
     return null;
   }
 
+  /**
+   * The colour most of the screen's edge cells are painted: the top and bottom rows and the outer
+   * columns, which meet the tab strip and the message bar. Default-background cells vote too (for the
+   * theme), so a few painted cells in the middle of the screen, or a diff, don't sway it.
+   */
   private detectTerminalBackground(): string | null {
     if (!this.terminal) return null;
     const buffer = this.terminal.buffer.active;
     const nullCell = buffer.getNullCell();
-    const counts = new Map<string, number>();
+    const counts = new Map<string | null, number>();
+    const t = this.baseTheme;
+    const ansi = [t.black, t.red, t.green, t.yellow, t.blue, t.magenta, t.cyan, t.white,
+      t.brightBlack, t.brightRed, t.brightGreen, t.brightYellow, t.brightBlue, t.brightMagenta, t.brightCyan, t.brightWhite];
 
     const first = buffer.baseY;
     const lastRow = Math.min(buffer.length - 1, buffer.baseY + this.terminal.rows - 1);
@@ -263,37 +271,19 @@ export class HerdrTerminalView extends ItemView {
 
       for (let x = 0; x <= lastCol; x = edgeRow || x === lastCol ? x + 1 : lastCol) {
         line.getCell(x, nullCell);
-        if (nullCell.isBgRGB()) {
-          const hex = '#' + nullCell.getBgColor().toString(16).padStart(6, '0');
-          counts.set(hex, (counts.get(hex) || 0) + 1);
-        } else if (nullCell.isBgPalette()) {
-          const hex = this.paletteIndexToHex(nullCell.getBgColor());
-          if (hex) counts.set(hex, (counts.get(hex) || 0) + 1);
+        let hex: string | null = null;
+        if (nullCell.isBgRGB()) hex = '#' + nullCell.getBgColor().toString(16).padStart(6, '0');
+        else if (nullCell.isBgPalette()) {
+          const idx = nullCell.getBgColor();
+          hex = idx < 16 ? ansi[idx] : this.paletteIndexToHex(idx);
         }
+        counts.set(hex, (counts.get(hex) || 0) + 1);
       }
     }
 
-    // If edge rows didn't find any custom background, scan the left column (x=0)
-    // for full-screen TUIs whose formatted boxes don't reach the right terminal boundary
-    if (counts.size === 0) {
-      for (let y = first; y <= lastRow; y++) {
-        const line = buffer.getLine(y);
-        if (!line) continue;
-        line.getCell(0, nullCell);
-        if (nullCell.isBgRGB()) {
-          const hex = '#' + nullCell.getBgColor().toString(16).padStart(6, '0');
-          counts.set(hex, (counts.get(hex) || 0) + 1);
-        } else if (nullCell.isBgPalette()) {
-          const hex = this.paletteIndexToHex(nullCell.getBgColor());
-          if (hex) counts.set(hex, (counts.get(hex) || 0) + 1);
-        }
-      }
-    }
-
-    if (counts.size === 0) return null;
     let topColor: string | null = null;
     let maxCount = 0;
-    for (const [color, count] of counts.entries()) {
+    for (const [color, count] of counts) {
       if (count > maxCount) {
         maxCount = count;
         topColor = color;
