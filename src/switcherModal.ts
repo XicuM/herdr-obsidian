@@ -84,7 +84,7 @@ export class HarnessPickerModal extends FuzzySuggestModal<string> {
   constructor(app: App, onPick: (kind: string) => void) {
     super(app);
     this.onPick = onPick;
-    this.setPlaceholder('Select agent harness (claude, codex, opencode, ...):');
+    this.setPlaceholder('Select the agent to start');
   }
 
   getItems(): string[] {

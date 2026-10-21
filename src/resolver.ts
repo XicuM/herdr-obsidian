@@ -91,8 +91,8 @@ export class AgentResolver {
       .filter((t) => t.workspace_id === ws.workspace_id)
       .map((t) => {
         const pane = panes.find((p) => p.tab_id === t.tab_id) || null;
-        const agent = (pane?.agent as string) || null;
-        const status = (pane?.agent_status || t.agent_status || 'unknown') as AgentStatus;
+        const agent = pane?.agent || null;
+        const status = pane?.agent_status || t.agent_status || 'unknown';
         return {
           tab_id: t.tab_id,
           workspace_id: ws.workspace_id,
@@ -101,7 +101,7 @@ export class AgentResolver {
           status,
           label: agent || t.label || 'shell',
           running: !!agent || (t.pane_count ?? 0) > 0
-        } as Conversation;
+        };
       })
       .sort((a, b) => (a.tab_id < b.tab_id ? -1 : a.tab_id > b.tab_id ? 1 : 0));
   }

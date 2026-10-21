@@ -14,7 +14,7 @@ export class RenameTabModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl('h3', { text: 'Rename Tab' });
+    this.setTitle('Rename tab');
 
     let newName = this.currentName;
 
@@ -31,7 +31,7 @@ export class RenameTabModal extends Modal {
             this.submit(newName);
           }
         });
-        setTimeout(() => {
+        window.setTimeout(() => {
           text.inputEl.focus();
           text.inputEl.select();
         }, 20);

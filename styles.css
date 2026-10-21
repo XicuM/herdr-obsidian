@@ -296,7 +296,8 @@
   overflow: hidden !important;
 }
 
-.herdr-view-container {
+/* Specific enough to beat Obsidian's own .view-content padding. */
+.workspace-leaf-content .view-content.herdr-view-container {
   display: flex;
   flex-direction: column;
   height: 100%;

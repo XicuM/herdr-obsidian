@@ -1,10 +1,9 @@
-import { ItemView, WorkspaceLeaf, Menu, Notice, TFile, setIcon, Platform } from 'obsidian';
-import { Terminal } from '@xterm/xterm';
+import { App, ItemView, WorkspaceLeaf, Menu, Notice, TFile, setIcon, Platform } from 'obsidian';
+import { IBufferLine, ILink, Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Conversation } from './resolver';
-import { HerdrTerminalStream } from './terminalStream';
-import { BridgeTerminalStream } from './bridgeTerminalStream';
-import { getTerminalTheme } from './terminalTheme';
+import { TerminalStream } from './terminalStream';
+import { getTerminalTheme, TerminalThemeColors } from './terminalTheme';
 import type HerdrPlugin from './main';
 
 export const HERDR_VIEW_TYPE = 'herdr-obsidian-terminal-view';
@@ -32,7 +31,7 @@ export class HerdrTerminalView extends ItemView {
   private plugin: HerdrPlugin;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
-  private stream: HerdrTerminalStream | BridgeTerminalStream | null = null;
+  private stream: TerminalStream | null = null;
   private streamSession = '';
   private streamErrored = false;
   private currentPaneId: string | null = null;
@@ -46,6 +45,8 @@ export class HerdrTerminalView extends ItemView {
   private dragCounter = 0;
   private bgUpdateRaf: number | null = null;
   private currentDetectedBg: string | null = null;
+  /** The theme from settings and Obsidian's CSS, cached: resolving it reads computed styles. */
+  private baseTheme!: TerminalThemeColors;
   private onDragEnter: ((e: DragEvent) => void) | null = null;
   private onDragOver: ((e: DragEvent) => void) | null = null;
   private onDragLeave: ((e: DragEvent) => void) | null = null;
@@ -72,9 +73,6 @@ export class HerdrTerminalView extends ItemView {
     const container = this.contentEl;
     container.empty();
     container.addClass('herdr-view-container');
-    container.style.padding = '0';
-    container.style.margin = '0';
-    container.style.overflow = 'hidden';
 
     this.tabBarEl = container.createDiv({ cls: 'herdr-tab-bar' });
     this.terminalContainerEl = container.createDiv({ cls: 'herdr-terminal-container' });
@@ -100,11 +98,13 @@ export class HerdrTerminalView extends ItemView {
       addKey('↑', '\x1b[A');
       addKey('↓', '\x1b[B');
       addKey('Clear', '\x0c');
-      addKey('Paste', async () => {
-        try {
-          const text = await navigator.clipboard.readText();
-          if (text) this.stream?.sendInput(text);
-        } catch {}
+      addKey('Paste', () => {
+        navigator.clipboard.readText().then(
+          (text) => text && this.stream?.sendInput(text),
+          () => {
+            // No clipboard permission: nothing to paste.
+          }
+        );
       });
     }
 
@@ -172,9 +172,9 @@ export class HerdrTerminalView extends ItemView {
   async onClose() {
     if (this.onDragEnter) {
       this.terminalContainerEl.removeEventListener('dragenter', this.onDragEnter);
-      this.terminalContainerEl.removeEventListener('dragover', this.onDragOver!);
-      this.terminalContainerEl.removeEventListener('dragleave', this.onDragLeave!);
-      this.terminalContainerEl.removeEventListener('drop', this.onDrop!);
+      this.terminalContainerEl.removeEventListener('dragover', this.onDragOver);
+      this.terminalContainerEl.removeEventListener('dragleave', this.onDragLeave);
+      this.terminalContainerEl.removeEventListener('drop', this.onDrop);
     }
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
@@ -195,15 +195,24 @@ export class HerdrTerminalView extends ItemView {
 
   public applyTheme() {
     if (!this.terminal) return;
-    const theme = getTerminalTheme(this.plugin.settings.themeMode);
-    this.terminal.options.theme = theme;
+    this.baseTheme = getTerminalTheme(this.plugin.settings.themeMode);
+    this.terminal.options.theme = this.baseTheme;
     this.updateDetectedBackground();
+  }
+
+  /** Drops the pane's stream while Obsidian is in the background (mobile); [resume] re-attaches it. */
+  public suspend() {
+    this.detachStream();
+  }
+
+  public resume() {
+    if (this.currentPaneId) this.attachToPane(this.currentPaneId, true);
   }
 
   public updateDetectedBackground() {
     if (!this.terminal) return;
     const detected = this.detectTerminalBackground();
-    const baseTheme = getTerminalTheme(this.plugin.settings.themeMode);
+    const baseTheme = this.baseTheme;
     const fallback = baseTheme.background || 'var(--background-primary)';
     const effectiveBg = detected || fallback;
     if (effectiveBg !== this.currentDetectedBg) {
@@ -307,9 +316,11 @@ export class HerdrTerminalView extends ItemView {
 
   private initTerminal() {
     const theme = getTerminalTheme(this.plugin.settings.themeMode);
+    this.baseTheme = theme;
 
     this.terminal = new Terminal({
-      cursorBlink: true,
+      // Each blink repaints the terminal: needless battery drain on a phone.
+      cursorBlink: !Platform.isMobile,
       cursorStyle: 'block',
       fontFamily: "ui-monospace, 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace",
       fontSize: this.plugin.settings.fontSize || 14,
@@ -361,7 +372,10 @@ export class HerdrTerminalView extends ItemView {
           if (!lineObj) continue;
 
           const outColumns: number[] = [];
-          const lineStr = (lineObj as any).translateToString(true, 0, undefined, outColumns);
+          // xterm's translateToString also maps each character to its column (an undocumented 4th argument).
+          const lineStr = (lineObj as IBufferLine & {
+            translateToString(trimRight: boolean, start: number, end: number | undefined, outColumns: number[]): string;
+          }).translateToString(true, 0, undefined, outColumns);
 
           for (let i = 0; i < lineStr.length; i++) {
             const col = outColumns[i] !== undefined ? outColumns[i] : i;
@@ -372,7 +386,7 @@ export class HerdrTerminalView extends ItemView {
 
         if (!logicalText) return callback(undefined);
 
-        const links = [];
+        const links: ILink[] = [];
         let match: RegExpExecArray | null;
         FILE_LINK_REGEX.lastIndex = 0;
 
@@ -500,7 +514,7 @@ export class HerdrTerminalView extends ItemView {
 
     this.updateDetectedBackground();
 
-    setTimeout(() => {
+    window.setTimeout(() => {
       this.handleResize();
     }, 50);
   }
@@ -508,7 +522,10 @@ export class HerdrTerminalView extends ItemView {
   private handleResize() {
     if (!this.terminal || !this.terminalContainerEl) return;
     try {
-      const core = (this.terminal as any)._core;
+      // xterm internals: the cell size its renderer measured, to fit the pane exactly.
+      const core = (this.terminal as Terminal & {
+        _core?: { _renderService?: { dimensions?: { css: { cell: { width: number; height: number } } }; clear?: () => void } };
+      })._core;
       const dims = core?._renderService?.dimensions;
       if (dims && dims.css.cell.width > 0 && dims.css.cell.height > 0) {
         const width = this.terminalContainerEl.clientWidth;
@@ -516,7 +533,7 @@ export class HerdrTerminalView extends ItemView {
         const cols = Math.max(10, Math.floor(width / dims.css.cell.width));
         const rows = Math.max(5, Math.floor(height / dims.css.cell.height));
         if (this.terminal.cols !== cols || this.terminal.rows !== rows) {
-          core._renderService.clear();
+          core._renderService?.clear?.();
           this.terminal.resize(cols, rows);
         }
       } else if (this.fitAddon) {
@@ -525,7 +542,9 @@ export class HerdrTerminalView extends ItemView {
       if (this.stream) {
         this.stream.resize(this.terminal.cols, this.terminal.rows);
       }
-    } catch {}
+    } catch {
+      // Not rendered yet (hidden view): the next resize fits it.
+    }
   }
 
   private openTerminalLink(raw: string, newLeaf: boolean | 'tab') {
@@ -555,7 +574,7 @@ export class HerdrTerminalView extends ItemView {
 
     if (clean) {
       const openState = lineNumber !== undefined ? { eState: { line: Math.max(0, lineNumber - 1) } } : undefined;
-      this.plugin.app.workspace.openLinkText(clean, '', newLeaf, openState);
+      void this.plugin.app.workspace.openLinkText(clean, '', newLeaf, openState);
     }
   }
 
@@ -580,7 +599,7 @@ export class HerdrTerminalView extends ItemView {
       newAgentBtn.addEventListener('click', () => this.plugin.promptNewConversation());
       const newShellBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New shell' });
       newShellBtn.setAttribute('aria-label', 'Open a new shell tab');
-      newShellBtn.addEventListener('click', () => this.plugin.newShellTab());
+      newShellBtn.addEventListener('click', () => void this.plugin.newShellTab());
       return;
     }
 
@@ -609,7 +628,7 @@ export class HerdrTerminalView extends ItemView {
       dot.setAttribute('aria-label', `Status: ${c.status}`);
 
       // Tab label
-      const labelSpan = innerEl.createDiv({ cls: 'herdr-tab-label', text: c.label });
+      innerEl.createDiv({ cls: 'herdr-tab-label', text: c.label });
 
       // Close button (x) — native clickable-icon styling with Lucide 'x'
       const closeBtn = innerEl.createDiv({ cls: 'herdr-tab-close clickable-icon' });
@@ -617,9 +636,9 @@ export class HerdrTerminalView extends ItemView {
       closeBtn.setAttribute('aria-label', `Close ${c.label}`);
       setIcon(closeBtn, 'x');
 
-      closeBtn.addEventListener('click', async (e) => {
+      closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        await this.plugin.closeConversationTab(c);
+        void this.plugin.closeConversationTab(c);
       });
 
       tabEl.setAttribute('role', 'tab');
@@ -693,7 +712,7 @@ export class HerdrTerminalView extends ItemView {
         tabEl.removeClass('drop-target-right');
       });
 
-      tabEl.addEventListener('drop', async (e) => {
+      tabEl.addEventListener('drop', (e) => {
         e.preventDefault();
         const fromTabId = e.dataTransfer?.getData('text/plain');
         tabEl.removeClass('drop-target-left');
@@ -702,14 +721,14 @@ export class HerdrTerminalView extends ItemView {
 
         const rect = tabEl.getBoundingClientRect();
         const isBefore = e.clientX < rect.left + rect.width / 2;
-        await this.plugin.reorderTab(fromTabId, c.tab_id, isBefore);
+        void this.plugin.reorderTab(fromTabId, c.tab_id, isBefore);
       });
 
       // Middle click to close tab (matches Obsidian tab behavior)
-      tabEl.addEventListener('auxclick', async (e) => {
+      tabEl.addEventListener('auxclick', (e) => {
         if (e.button === 1) {
           e.preventDefault();
-          await this.plugin.closeConversationTab(c);
+          void this.plugin.closeConversationTab(c);
         }
       });
 
@@ -718,17 +737,17 @@ export class HerdrTerminalView extends ItemView {
         e.preventDefault();
         const menu = new Menu();
         menu.addItem((item) => {
-          item.setTitle('Rename Tab')
+          item.setTitle('Rename tab')
             .setIcon('pencil')
             .onClick(() => {
               this.plugin.promptRename(c);
             });
         });
         menu.addItem((item) => {
-          item.setTitle('Close Tab')
+          item.setTitle('Close tab')
             .setIcon('trash')
             .onClick(() => {
-              this.plugin.closeConversationTab(c);
+              void this.plugin.closeConversationTab(c);
             });
         });
         menu.showAtMouseEvent(e);
@@ -753,7 +772,7 @@ export class HerdrTerminalView extends ItemView {
     addTabBtn.setAttribute('aria-label', 'New terminal tab');
     setIcon(addTabBtn, 'plus');
     addTabBtn.addEventListener('click', () => {
-      this.plugin.newShellTab();
+      void this.plugin.newShellTab();
     });
   }
 
@@ -833,7 +852,7 @@ export class HerdrTerminalView extends ItemView {
 
   private handleDrop(e: DragEvent) {
     if (!this.stream?.isRunning) {
-      new Notice('No active Herdr terminal tab to drop into.');
+      new Notice('No active herdr terminal tab to drop into.');
       return;
     }
 
@@ -867,41 +886,21 @@ export class HerdrTerminalView extends ItemView {
     };
 
     // 1. Check Obsidian's internal DragManager (dragging from File Explorer)
-    const dragManager = (this.plugin.app as any).dragManager;
-    const draggable = dragManager?.draggable;
+    // Obsidian internals: what its file explorer is dragging.
+    const draggable = (this.plugin.app as App & {
+      dragManager?: { draggable?: { type: string; file?: TFile; files?: TFile[] } };
+    }).dragManager?.draggable;
     if (draggable) {
       if (draggable.type === 'file' && draggable.file?.path) {
         return formatPath(draggable.file.path);
       }
       if (draggable.type === 'files' && Array.isArray(draggable.files)) {
-        const paths = draggable.files
-          .filter((f: any) => f?.path)
-          .map((f: any) => formatPath(f.path));
+        const paths = draggable.files.filter((f) => f?.path).map((f) => formatPath(f.path));
         if (paths.length > 0) return paths.join('');
       }
     }
 
-    // 2. Check native OS file drops (dragged from OS file manager / desktop)
-    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-      const vaultPath = this.plugin.getVaultFolderPath();
-      const parts: string[] = [];
-      for (let i = 0; i < e.dataTransfer.files.length; i++) {
-        const file = e.dataTransfer.files[i];
-        const absPath = (file as any).path;
-        if (absPath) {
-          let finalPath = absPath;
-          if (vaultPath && absPath.startsWith(vaultPath)) {
-            finalPath = absPath.slice(vaultPath.length).replace(/^[/\\]+/, '');
-          }
-          parts.push(formatPath(finalPath));
-        }
-      }
-      if (parts.length > 0) {
-        return parts.join('');
-      }
-    }
-
-    // 3. Check plain text (dragged selection from editor or reading view)
+    // 2. Check plain text (dragged selection from editor or reading view)
     const text = e.dataTransfer?.getData('text/plain');
     if (text) {
       // Check if it's an internal Obsidian wikilink: [[Target]] or [[Target#Heading]] or [[Target|Alias]]

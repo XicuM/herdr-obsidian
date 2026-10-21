@@ -1,11 +1,4 @@
-import { Platform } from 'obsidian';
-
-// Dynamically resolve Node builtins only on desktop Electron
-const net: typeof import('net') | null = Platform.isDesktop ? require('net') : null;
-const fs: typeof import('fs') | null = Platform.isDesktop ? require('fs') : null;
-const os: typeof import('os') | null = Platform.isDesktop ? require('os') : null;
-const path: typeof import('path') | null = Platform.isDesktop ? require('path') : null;
-const spawn = Platform.isDesktop ? require('child_process').spawn : null;
+import { requestUrl } from 'obsidian';
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
@@ -44,7 +37,7 @@ export interface Workspace {
   workspace_id: string;
   label: string;
   active_tab_id?: string;
-  agent_status?: string;
+  agent_status?: AgentStatus;
   pane_count?: number;
   tab_count?: number;
 }
@@ -53,13 +46,23 @@ export interface Tab {
   tab_id: string;
   workspace_id: string;
   label?: string;
-  agent_status?: string;
+  agent_status?: AgentStatus;
   pane_count?: number;
+}
+
+export interface Pane {
+  pane_id: string;
+  tab_id: string;
+  workspace_id: string;
+  cwd?: string;
+  foreground_cwd?: string;
+  agent?: string;
+  agent_status?: AgentStatus;
 }
 
 export interface Snapshot {
   agents: Agent[];
-  panes: any[];
+  panes: Pane[];
   tabs: Tab[];
   workspaces: Workspace[];
   focused_workspace_id?: string;
@@ -67,179 +70,89 @@ export interface Snapshot {
   version?: string;
 }
 
+/** What herdr-bridge pushes on `/ws/session`: each new snapshot (wrapped in herdr's reply), or why there is none. */
+export type BridgeEvent =
+  | { type: 'snapshot'; data: Snapshot & { snapshot?: Snapshot } }
+  | { type: 'error'; error: string };
+
+export interface HerdrClientOptions {
+  host: string;
+  token: string;
+  session?: string;
+}
+
+/**
+ * Herdr, reached through herdr-bridge over HTTP and WebSockets: on this machine (`127.0.0.1:7788`)
+ * or another one (e.g. a laptop over Tailscale, from a phone). No Node APIs, so it runs on mobile too.
+ */
 export class HerdrClient {
-  private socketPath: string;
+  private httpBase: string;
+  private wsBase: string;
+  private token: string;
   public readonly session: string;
 
-  constructor(session = '') {
-    this.session = session;
-    if (!Platform.isDesktop || !os || !path) {
-      this.socketPath = '';
-      return;
+  constructor(opts: HerdrClientOptions) {
+    let raw = opts.host.trim().replace(/\/+$/, '');
+    if (!raw.includes('://')) {
+      raw = `http://${raw}`;
     }
-    const base = path.join(os.homedir(), '.config', 'herdr');
-    const sockPath = session
-      ? path.join(base, 'sessions', session, 'herdr.sock')
-      : path.join(base, 'herdr.sock');
-    this.socketPath = (typeof process !== 'undefined' && process.env?.HERDR_SOCKET_PATH) || sockPath;
-  }
-
-  getSocketPath(): string {
-    if (typeof process !== 'undefined' && process.env?.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
-    return this.socketPath;
-  }
-
-  isAvailable(): boolean {
-    if (!Platform.isDesktop || !fs || !path) return false;
     try {
-      const sockExists = fs.existsSync(this.getSocketPath());
-      if (!sockExists) return false;
-
-      if (
-        fs.existsSync('/usr/bin/herdr') ||
-        fs.existsSync('/usr/local/bin/herdr') ||
-        (os && fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'herdr'))) ||
-        (os && fs.existsSync(path.join(os.homedir(), '.cargo', 'bin', 'herdr')))
-      ) {
-        return true;
-      }
-
-      const pathEnv = (typeof process !== 'undefined' && process.env?.PATH) || '';
-      const pathDirs = pathEnv.split(path.delimiter);
-      for (const dir of pathDirs) {
-        if (!dir) continue;
-        const binPath = path.join(dir, 'herdr');
-        if (fs.existsSync(binPath)) {
-          return true;
-        }
-      }
-
-      return false;
+      const u = new URL(raw);
+      this.httpBase = `${u.protocol}//${u.host}`;
+      this.wsBase = `${u.protocol === 'https:' ? 'wss:' : 'ws:'}//${u.host}`;
     } catch {
-      return false;
+      this.httpBase = `http://${opts.host}`;
+      this.wsBase = `ws://${opts.host}`;
     }
+    this.token = opts.token.trim();
+    this.session = opts.session || 'herdr-obsidian';
   }
 
-  async ensureServerRunning(): Promise<boolean> {
-    if (!Platform.isDesktop || !fs || !path || !os || !spawn) return false;
-    if (this.isAvailable()) return true;
-    const sockPath = this.getSocketPath();
-    if (fs.existsSync(sockPath)) return true;
-
-    if (this.session) {
-      const sessionDir = path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session);
-      if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-      }
-      const configPath = path.join(sessionDir, 'config.toml');
-      const env = {
-        ...(typeof process !== 'undefined' ? process.env : {}),
-        ...(fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
-      };
-      const child = spawn('herdr', ['--session', this.session, 'server'], {
-        detached: true,
-        stdio: 'ignore',
-        env
-      });
-      child.unref();
-
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 100));
-        if (fs.existsSync(sockPath)) return true;
-      }
-    }
-    return this.isAvailable();
+  getHost(): string {
+    return this.httpBase;
   }
 
-  private async rawRequest(method: string, params: Record<string, unknown> = {}, timeoutMs = 15000): Promise<any> {
-    if (!Platform.isDesktop || !net || !fs) {
-      throw new Error('Local UNIX socket HerdrClient is only supported on Desktop');
-    }
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
-    return new Promise((resolve, reject) => {
-      if (!fs.existsSync(sockPath)) {
-        return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
-      }
-      const socket = net.createConnection(sockPath);
-      const id = `obsidian:${Math.random().toString(36).slice(2)}`;
-      let buf = '';
-      let settled = false;
+  isConfigured(): boolean {
+    return !!this.httpBase && !!this.token;
+  }
 
-      const done = (err: Error | null, data?: any) => {
-        if (settled) return;
-        settled = true;
-        socket.end();
-        if (err) reject(err);
-        else resolve(data);
-      };
-
-      socket.setTimeout(timeoutMs);
-      socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
-      socket.on('error', (e) => done(e));
-      socket.on('data', (d) => {
-        buf += d.toString('utf8');
-        const lines = buf.split('\n');
-        if (buf.includes(`"${id}"`)) {
-          try {
-            const last = lines
-              .filter((l) => l.includes(`"${id}"`))
-              .pop();
-            const parsed = JSON.parse(last!);
-            done(null, parsed);
-          } catch {
-            /* keep buffering until a full line appears */
-          }
-        }
-      });
-
-      const req = JSON.stringify({ id, method, params });
-      socket.write(req + '\n');
+  private async rpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/rpc/${encodeURIComponent(method)}`;
+    const res = await requestUrl({
+      url,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(params),
+      throw: false
     });
-  }
-
-  private async call(method: string, params: Record<string, unknown> = {}, errorMsg?: string): Promise<any> {
-    const resp = await this.rawRequest(method, params);
-    if (resp.error) {
-      throw new Error(errorMsg || `${method} failed: ${resp.error.message || JSON.stringify(resp.error)}`);
+    if (res.status >= 400) {
+      throw new Error(`Herdr RPC ${method} failed (${res.status}): ${res.text}`);
     }
-    return resp.result;
-  }
-
-  async ping(): Promise<boolean> {
-    try {
-      const r = await this.call('ping', {});
-      return r?.type === 'pong';
-    } catch {
-      return false;
-    }
+    return res.json as unknown;
   }
 
   async snapshot(): Promise<Snapshot> {
-    const r = await this.call('session.snapshot', {});
-    return r.snapshot as Snapshot;
-  }
-
-  async listWorkspaces(): Promise<Workspace[]> {
-    const r = await this.call('workspace.list', {});
-    return r.workspaces as Workspace[];
+    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/snapshot`;
+    const res = await requestUrl({
+      url,
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${this.token}`
+      },
+      throw: false
+    });
+    if (res.status >= 400) {
+      throw new Error(`Failed to fetch snapshot (${res.status}): ${res.text}`);
+    }
+    const data = res.json as Snapshot & { snapshot?: Snapshot };
+    return data.snapshot || data;
   }
 
   async createWorkspace(cwd: string, label: string, focus = false): Promise<{ workspace: Workspace }> {
-    const r = await this.call('workspace.create', { cwd, label, focus });
-    return r;
-  }
-
-  async listTabs(workspaceId: string): Promise<Tab[]> {
-    const r = await this.call('tab.list', { workspace_id: workspaceId });
-    return r.tabs as Tab[];
-  }
-
-  async listPanes(workspaceId?: string): Promise<any[]> {
-    const r = await this.call('pane.list', { workspace_id: workspaceId || null });
-    return r.panes as any[];
+    return (await this.rpc('workspace.create', { cwd, label, focus })) as { workspace: Workspace };
   }
 
   async createTab(
@@ -247,165 +160,105 @@ export class HerdrClient {
     label?: string | null,
     focus = false,
     env?: Record<string, string>
-  ): Promise<{ tab: Tab; root_pane: any }> {
-    const r = await this.call('tab.create', {
+  ): Promise<{ tab: Tab; root_pane: { pane_id: string } }> {
+    const res = (await this.rpc('tab.create', {
       workspace_id: workspaceId,
       label,
       focus,
       ...(env ? { env } : {})
-    });
-    return r;
+    })) as { tab?: Tab; root_pane?: { pane_id: string }; pane?: { pane_id: string }; pane_id?: string } & Tab;
+    return {
+      tab: res.tab || res,
+      root_pane: res.root_pane || res.pane || { pane_id: res.pane_id }
+    };
   }
 
   async focusTab(tabId: string): Promise<void> {
-    await this.call('tab.focus', { tab_id: tabId });
+    await this.rpc('tab.focus', { tab_id: tabId });
   }
 
   async focusWorkspace(workspaceId: string): Promise<void> {
-    await this.call('workspace.focus', { workspace_id: workspaceId });
-  }
-
-  async listAgents(): Promise<Agent[]> {
-    const r = await this.call('agent.list', {});
-    return r.agents as Agent[];
-  }
-
-  async getAgent(target: string): Promise<any> {
-    const r = await this.call('agent.get', { target });
-    return r;
+    await this.rpc('workspace.focus', { workspace_id: workspaceId });
   }
 
   async closeTab(tabId: string): Promise<void> {
-    try {
-      await this.call('tab.close', { tab_id: tabId });
-    } catch {
-      // best effort
-    }
+    await this.rpc('tab.close', { tab_id: tabId });
   }
 
-  async renameTab(tabId: string, label: string): Promise<any> {
-    try {
-      return await this.call('tab.rename', { tab_id: tabId, label });
-    } catch {
-      // best effort
-    }
+  async renameTab(tabId: string, label: string): Promise<void> {
+    await this.rpc('tab.rename', { tab_id: tabId, label });
   }
 
-  async focusPane(paneId: string): Promise<any> {
-    try {
-      return await this.call('pane.focus', { pane_id: paneId });
-    } catch {
-      // best effort
-    }
-  }
-
+  /** Retries for a while when the new pane's shell isn't ready yet ("is not an available shell"). */
   async agentStart(
     name: string,
     kind: string,
     paneId: string,
     args: string[] = [],
     timeoutMs = 60000
-  ): Promise<any> {
+  ): Promise<unknown> {
     const start = Date.now();
-    const maxWaitMs = 15000;
-    while (true) {
+    for (;;) {
       try {
-        return await this.rawRequestWithTimeout(
-          'agent.start',
-          { name, kind, pane_id: paneId, timeout_ms: timeoutMs, ...(args.length ? { args } : {}) },
-          timeoutMs + 10000
-        );
-      } catch (err: any) {
-        const msg = String(err?.message || err || '');
-        if (msg.includes('is not an available shell') && Date.now() - start < maxWaitMs) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          continue;
-        }
-        throw err;
+        return await this.rpc('agent.start', {
+          name,
+          kind,
+          pane_id: paneId,
+          timeout_ms: timeoutMs,
+          ...(args.length ? { args } : {})
+        });
+      } catch (err) {
+        if (!String(err).includes('is not an available shell') || Date.now() - start > 15000) throw err;
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
       }
     }
   }
 
-  private async rawRequestWithTimeout(
-    method: string,
-    params: Record<string, unknown>,
-    timeoutMs: number
-  ): Promise<any> {
-    const resp = await this.rawRequest(method, params, timeoutMs);
-    if (resp.error) {
-      throw new Error(resp.error.message || `${method} failed`);
-    }
-    return resp.result;
-  }
+  async subscribeEvents(cb: (evt: BridgeEvent) => void): Promise<() => void> {
+    const wsUrl = `${this.wsBase}/s/${encodeURIComponent(this.session)}/ws/session?token=${encodeURIComponent(this.token)}`;
+    let ws: WebSocket | null = null;
+    let closed = false;
+    let retryTimer: number | null = null;
+    // Doubles up to a minute while the bridge is unreachable, so an offline phone isn't woken every few seconds.
+    let delay = 1000;
 
-  async subscribeEvents(cb: (evt: any) => void): Promise<() => void> {
-    if (!Platform.isDesktop || !net || !fs) {
-      return () => {};
-    }
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
-    if (!fs.existsSync(sockPath)) {
-      throw new Error(`Herdr socket not found: ${sockPath}`);
-    }
-    const socket = net.createConnection(sockPath);
-    const id = `obsidian-sub:${Math.random().toString(36).slice(2)}`;
-    let buf = '';
-    let acknowledged = false;
-
-    const req = JSON.stringify({
-      id,
-      method: 'events.subscribe',
-      params: {
-        subscriptions: [
-          { type: 'pane.agent_status_changed' },
-          { type: 'pane.created' },
-          { type: 'pane.closed' },
-          { type: 'pane.agent_detected' },
-          { type: 'tab.created' },
-          { type: 'tab.closed' },
-          { type: 'workspace.created' },
-          { type: 'workspace.closed' }
-        ]
-      }
-    });
-
-    return new Promise<() => void>((resolve, reject) => {
-      socket.on('error', (e) => reject(e));
-      socket.on('data', (d) => {
-        buf += d.toString('utf8');
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
+    const connect = () => {
+      if (closed) return;
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          delay = 1000;
+        };
+        ws.onmessage = (event) => {
+          if (closed) return;
           try {
-            const parsed = JSON.parse(line);
-            if (parsed.id && parsed.id === id) {
-              acknowledged = true;
-              resolve(() => {
-                try {
-                  socket.end();
-                } catch {}
-              });
-              continue;
-            }
-            if (parsed.event || parsed.type) {
-              try {
-                cb(parsed);
-              } catch {}
-            }
+            cb(JSON.parse(event.data as string) as BridgeEvent);
           } catch {
-            /* partial line */
+            // Not JSON: nothing the bridge sends on purpose.
           }
-        }
-      });
-      socket.write(req + '\n');
-      setTimeout(() => {
-        if (!acknowledged) {
-          reject(new Error('Herdr event subscription not acknowledged'));
-        }
-      }, 15000);
-    });
+        };
+        ws.onclose = () => {
+          if (!closed) {
+            // Shown like the bridge's own errors: there is no live snapshot until it reconnects.
+            cb({ type: 'error', error: 'Bridge unreachable' });
+            retryTimer = window.setTimeout(connect, delay);
+            delay = Math.min(delay * 2, 60000);
+          }
+        };
+      } catch {
+        // An invalid URL: the settings must change, which reconnects.
+      }
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    };
   }
 }

@@ -9,10 +9,6 @@ export class AgentAttender {
 
   constructor(private cfg: { focusOnBlocked: boolean }) {}
 
-  updateConfig(cfg: { focusOnBlocked: boolean }) {
-    this.cfg = cfg;
-  }
-
   setOnFocus(fn: (conv: Conversation) => void) {
     this.onFocus = fn;
   }

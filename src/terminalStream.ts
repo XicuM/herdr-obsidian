@@ -1,167 +1,175 @@
-import { Platform } from 'obsidian';
-
-const os: typeof import('os') | null = Platform.isDesktop ? require('os') : null;
-const path: typeof import('path') | null = Platform.isDesktop ? require('path') : null;
-const fs: typeof import('fs') | null = Platform.isDesktop ? require('fs') : null;
-const spawn = Platform.isDesktop ? require('child_process').spawn : null;
-
 export interface TerminalStreamCallbacks {
   onData: (data: Uint8Array) => void;
   onExit: (code: number | null) => void;
   onError: (err: string) => void;
 }
 
-export class HerdrTerminalStream {
-  private child: any = null;
-  private buffer = '';
+/** Reconnects after a dropped connection this many times (1 s, 2 s, 4 s…) before giving up. */
+const MAX_RETRIES = 5;
+
+/** One pane's terminal, streamed through herdr-bridge's `/ws/term/<pane>` WebSocket. */
+export class TerminalStream {
+  private ws: WebSocket | null = null;
   private isClosed = false;
+  private running = false;
+  private wsBase: string;
+  private cols = 80;
+  private rows = 24;
+  private retries = 0;
+  private retryTimer: number | null = null;
 
   constructor(
-    private paneId: string,
+    private host: string,
+    private token: string,
     private session: string,
+    private paneId: string,
     private callbacks: TerminalStreamCallbacks
-  ) {}
-
-  start(cols: number, rows: number) {
-    if (!Platform.isDesktop || !spawn || !os || !path) {
-      this.callbacks.onError('Local terminal stream is only supported on Desktop');
-      return;
+  ) {
+    let raw = host.trim().replace(/\/+$/, '');
+    if (!raw.includes('://')) {
+      raw = `http://${raw}`;
     }
-    const sessionArgs = this.session ? ['--session', this.session] : [];
-    const args = [
-      ...sessionArgs,
-      'terminal',
-      'session',
-      'control',
-      this.paneId,
-      '--takeover',
-      '--cols',
-      String(Math.max(10, cols)),
-      '--rows',
-      String(Math.max(5, rows))
-    ];
-
-    const sessionDir = this.session
-      ? path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session)
-      : path.join(os.homedir(), '.config', 'herdr');
-    const configPath = path.join(sessionDir, 'config.toml');
-    const env = {
-      ...process.env,
-      ...(fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
-    };
-
     try {
-      this.child = spawn('herdr', args, { env });
-    } catch (err: any) {
-      this.callbacks.onError(`Failed to spawn herdr: ${err?.message || err}`);
-      return;
+      const u = new URL(raw);
+      this.wsBase = `${u.protocol === 'https:' ? 'wss:' : 'ws:'}//${u.host}`;
+    } catch {
+      this.wsBase = `ws://${host}`;
     }
-
-    this.child.stdout.on('data', (chunk: Buffer) => {
-      if (this.isClosed) return;
-      this.buffer += chunk.toString('utf8');
-      const lines = this.buffer.split('\n');
-      this.buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim() || this.isClosed) continue;
-        try {
-          const frame = JSON.parse(line);
-          if (frame.type === 'terminal.closed') {
-            const reason = frame.reason;
-            this.close();
-            if (reason) {
-              this.callbacks.onError(reason);
-            }
-            return;
-          }
-
-          if (frame.bytes) {
-            const buf = Buffer.from(frame.bytes, 'base64');
-            this.callbacks.onData(new Uint8Array(buf));
-          }
-        } catch {
-          // Ignore invalid JSON / partial lines
-        }
-      }
-    });
-
-    this.child.stderr.on('data', (chunk: Buffer) => {
-      if (this.isClosed) return;
-      const errStr = chunk.toString('utf8');
-      if (errStr.trim()) {
-        this.callbacks.onError(errStr);
-      }
-    });
-
-    this.child.on('close', (code) => {
-      if (!this.isClosed) {
-        this.isClosed = true;
-        this.callbacks.onExit(code);
-      }
-    });
-
-    this.child.on('error', (err) => {
-      if (this.isClosed) return;
-      this.callbacks.onError(`Process error: ${err.message}`);
-    });
   }
 
   get isRunning(): boolean {
-    return !this.isClosed && !!this.child;
+    return this.running && !this.isClosed;
+  }
+
+  start(cols: number, rows: number) {
+    if (this.isClosed) return;
+    this.cols = cols;
+    this.rows = rows;
+    this.connect();
+  }
+
+  private connect() {
+    const url = `${this.wsBase}/s/${encodeURIComponent(this.session)}/ws/term/${encodeURIComponent(
+      this.paneId
+    )}?cols=${Math.max(10, this.cols)}&rows=${Math.max(5, this.rows)}&token=${encodeURIComponent(
+      this.token
+    )}&takeover=1`;
+
+    try {
+      this.ws = new WebSocket(url);
+      this.ws.binaryType = 'arraybuffer';
+
+      this.ws.onopen = () => {
+        this.running = true;
+        this.retries = 0;
+      };
+
+      this.ws.onmessage = (event: MessageEvent) => {
+        if (this.isClosed) return;
+
+        if (event.data instanceof ArrayBuffer) {
+          this.callbacks.onData(new Uint8Array(event.data));
+          return;
+        }
+
+        if (typeof event.data === 'string') {
+          try {
+            const frame = JSON.parse(event.data) as { type?: string; reason?: string; bytes?: string };
+            // The bridge says `term-closed` (e.g. another client took the pane over): no reconnecting.
+            if (frame.type === 'term-closed' || frame.type === 'terminal.closed') {
+              const reason = frame.reason || 'Terminal session closed';
+              this.close();
+              this.callbacks.onError(reason);
+              return;
+            }
+            if (frame.bytes) {
+              const buf = Uint8Array.from(atob(frame.bytes), (c) => c.charCodeAt(0));
+              this.callbacks.onData(buf);
+            }
+          } catch {
+            // Raw text fallback
+            const enc = new TextEncoder();
+            this.callbacks.onData(enc.encode(event.data));
+          }
+        }
+      };
+
+      // A failed connection is always followed by onclose, which reports it once.
+      this.ws.onclose = (event) => {
+        const wasRunning = this.running;
+        this.running = false;
+        if (this.isClosed) return;
+        // A blip on a working terminal (a phone switching networks): reconnect quietly a few times.
+        if ((wasRunning || this.retries > 0) && this.retries < MAX_RETRIES) {
+          this.retryTimer = window.setTimeout(() => this.connect(), 1000 * 2 ** this.retries++);
+          return;
+        }
+        this.isClosed = true;
+        this.callbacks.onExit(event.code);
+      };
+    } catch (err) {
+      this.callbacks.onError(`Failed to open terminal WebSocket: ${(err as Error).message}`);
+    }
   }
 
   sendInput(data: string | Uint8Array) {
-    if (!this.child || this.isClosed || !this.child.stdin.writable) return;
-    const b64 = typeof data === 'string'
-      ? Buffer.from(data, 'utf8').toString('base64')
-      : Buffer.from(data).toString('base64');
-    const msg = JSON.stringify({ type: 'terminal.input', bytes: b64 }) + '\n';
-    this.child.stdin.write(msg);
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      if (typeof data === 'string') {
+        const enc = new TextEncoder();
+        this.ws.send(enc.encode(data));
+      } else {
+        this.ws.send(data);
+      }
+    } catch {
+      // The socket closed meanwhile: its onclose reports it.
+    }
   }
 
   resize(cols: number, rows: number) {
-    if (!this.child || this.isClosed || !this.child.stdin.writable) return;
-    const msg = JSON.stringify({
-      type: 'terminal.resize',
-      cols: Math.max(10, cols),
-      rows: Math.max(5, rows)
-    }) + '\n';
-    this.child.stdin.write(msg);
+    this.cols = cols;
+    this.rows = rows;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(
+        JSON.stringify({
+          cols: Math.max(10, cols),
+          rows: Math.max(5, rows)
+        })
+      );
+    } catch {
+      // The socket closed meanwhile: its onclose reports it.
+    }
   }
 
-  scroll(direction: 'up' | 'down', lines: number) {
-    if (!this.child || this.isClosed || !this.child.stdin.writable) return;
-    const count = Math.max(1, Math.round(lines));
-    const msg = JSON.stringify({
-      type: 'terminal.scroll',
-      direction,
-      lines: count
-    }) + '\n';
-    this.child.stdin.write(msg);
+  scroll(direction: 'up' | 'down', lines: number, column?: number, row?: number) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(
+        JSON.stringify({
+          type: 'terminal.scroll',
+          direction,
+          lines: Math.max(1, lines),
+          ...(column !== undefined ? { column } : {}),
+          ...(row !== undefined ? { row } : {})
+        })
+      );
+    } catch {
+      // The socket closed meanwhile: its onclose reports it.
+    }
   }
 
   close() {
-    if (this.isClosed) return;
     this.isClosed = true;
-    const child = this.child;
-    this.child = null;
-
-    if (child) {
-      child.stdout.removeAllListeners();
-      child.stderr.removeAllListeners();
-      child.removeAllListeners();
-      if (child.stdin.writable) {
-        try {
-          child.stdin.write(JSON.stringify({ type: 'terminal.release' }) + '\n');
-          child.stdin.end();
-        } catch {}
+    this.running = false;
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // Already closing.
       }
-      setTimeout(() => {
-        try {
-          child.kill('SIGTERM');
-        } catch {}
-      }, 300);
+      this.ws = null;
     }
   }
 }

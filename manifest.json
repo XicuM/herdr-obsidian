@@ -1,9 +1,9 @@
 {
-  "id": "herdr-obsidian",
-  "name": "Herdr Obsidian",
-  "version": "0.1.0",
-  "minAppVersion": "1.0.0",
-  "description": "Herdr AI coding agents inside Obsidian: embedded terminal tabs, live status, and file drag-and-drop.",
+  "id": "herdr",
+  "name": "Herdr",
+  "version": "0.2.0",
+  "minAppVersion": "1.7.2",
+  "description": "Run and watch herdr AI coding agents from a terminal view, on desktop and mobile, and sync this vault with your laptop.",
   "author": "XicuM",
   "authorUrl": "https://github.com/XicuM",
   "isDesktopOnly": false

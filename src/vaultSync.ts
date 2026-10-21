@@ -1,4 +1,4 @@
-import { App, TFile, Notice, requestUrl } from 'obsidian';
+import { App, TFile, Notice, normalizePath, requestUrl } from 'obsidian';
 
 export interface RemoteFileInfo {
   path: string;
@@ -6,6 +6,10 @@ export interface RemoteFileInfo {
   size: number;
 }
 
+/**
+ * Each side's mtime at the last sync: the phone's (ms) and the laptop's (s). Each is only ever
+ * compared with the same side's, so the two clocks never need to agree.
+ */
 export interface SyncLedgerEntry {
   localMtime: number;
   remoteMtime: number;
@@ -21,6 +25,28 @@ export interface SyncResult {
   conflicts: number;
   deleted: number;
   errors: string[];
+}
+
+const EXCLUDED_DIRS = ['node_modules', 'target', 'dist', 'build', '__pycache__'];
+const SYNCED_EXTENSIONS = ['md', 'canvas', 'txt', 'json', 'csv', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'pdf'];
+
+/**
+ * Notes, canvases and media outside hidden folders (`.obsidian` too: its settings are per device,
+ * and hold this plugin's bridge token) and build folders. The bridge's `is_syncable` matches it.
+ */
+export function isSyncablePath(relPath: string): boolean {
+  const parts = relPath.split('/');
+  const name = parts.pop() ?? '';
+  if (name.startsWith('.') || parts.some((p) => p.startsWith('.') || EXCLUDED_DIRS.includes(p))) return false;
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && SYNCED_EXTENSIONS.includes(name.slice(dot + 1).toLowerCase());
+}
+
+function sameBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  return x.every((v, i) => v === y[i]);
 }
 
 export class VaultSync {
@@ -48,301 +74,130 @@ export class VaultSync {
     this.session = session;
   }
 
-  private isSyncablePath(relPath: string): boolean {
-    const parts = relPath.split(/[\\/]/);
-    for (const p of parts) {
-      if (
-        p === '.git' ||
-        p === 'node_modules' ||
-        p === 'target' ||
-        p === '.venv' ||
-        p === 'dist' ||
-        p === 'build' ||
-        p === '__pycache__'
-      ) {
-        return false;
-      }
-      if (p.startsWith('.') && p !== '.obsidian') {
-        return false;
-      }
-    }
-    const ext = relPath.split('.').pop()?.toLowerCase();
-    if (!ext) return false;
-    return [
-      'md',
-      'canvas',
-      'txt',
-      'json',
-      'csv',
-      'png',
-      'jpg',
-      'jpeg',
-      'gif',
-      'svg',
-      'webp',
-      'pdf'
-    ].includes(ext);
-  }
-
-  async fetchManifest(workspaceId: string): Promise<RemoteFileInfo[]> {
-    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/vault/manifest?workspace_id=${encodeURIComponent(
-      workspaceId
-    )}`;
+  /** The bridge serves the laptop's vault named like this one, so each phone vault syncs with its own. */
+  private async request(method: string, endpoint: 'manifest' | 'file', path?: string, body?: ArrayBuffer) {
+    const query = `vault=${encodeURIComponent(this.app.vault.getName())}${path !== undefined ? `&path=${encodeURIComponent(path)}` : ''}`;
     const res = await requestUrl({
-      url,
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${this.token}`
-      }
-    });
-    if (res.status >= 400) {
-      throw new Error(`Failed to fetch manifest (${res.status}): ${res.text}`);
-    }
-    return res.json as RemoteFileInfo[];
-  }
-
-  async downloadFile(workspaceId: string, path: string): Promise<ArrayBuffer> {
-    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/vault/file?workspace_id=${encodeURIComponent(
-      workspaceId
-    )}&path=${encodeURIComponent(path)}`;
-    const res = await requestUrl({
-      url,
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${this.token}`
-      }
-    });
-    if (res.status >= 400) {
-      throw new Error(`Failed to download ${path} (${res.status}): ${res.text}`);
-    }
-    return res.arrayBuffer;
-  }
-
-  async uploadFile(workspaceId: string, path: string, content: ArrayBuffer | string): Promise<void> {
-    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/vault/file?workspace_id=${encodeURIComponent(
-      workspaceId
-    )}&path=${encodeURIComponent(path)}`;
-    const res = await requestUrl({
-      url,
-      method: 'POST',
+      url: `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/vault/${endpoint}?${query}`,
+      method,
       headers: {
         'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/octet-stream'
+        ...(body ? { 'Content-Type': 'application/octet-stream' } : {})
       },
-      body: content
+      body,
+      throw: false
     });
-    if (res.status >= 400) {
-      throw new Error(`Failed to upload ${path} (${res.status}): ${res.text}`);
+    if (res.status >= 400 && !(method === 'DELETE' && res.status === 404)) {
+      throw new Error(`${method} ${endpoint} failed (${res.status}): ${res.text}`);
     }
+    return res;
   }
 
-  async deleteRemoteFile(workspaceId: string, path: string): Promise<void> {
-    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/vault/file?workspace_id=${encodeURIComponent(
-      workspaceId
-    )}&path=${encodeURIComponent(path)}`;
-    const res = await requestUrl({
-      url,
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${this.token}`
-      }
-    });
-    if (res.status >= 400 && res.status !== 404) {
-      throw new Error(`Failed to delete remote ${path} (${res.status}): ${res.text}`);
-    }
-  }
-
-  async sync(workspaceId: string, ledger: SyncLedger): Promise<{ result: SyncResult; updatedLedger: SyncLedger }> {
+  async sync(ledger: SyncLedger): Promise<{ result: SyncResult; updatedLedger: SyncLedger }> {
     const result: SyncResult = { pulled: 0, pushed: 0, conflicts: 0, deleted: 0, errors: [] };
     const updatedLedger: SyncLedger = { ...ledger };
 
     let remoteFiles: RemoteFileInfo[];
     try {
-      remoteFiles = await this.fetchManifest(workspaceId);
-    } catch (err: any) {
-      result.errors.push(`Manifest fetch failed: ${err.message}`);
+      remoteFiles = (await this.request('GET', 'manifest')).json as RemoteFileInfo[];
+    } catch (err) {
+      result.errors.push(`Manifest fetch failed: ${(err as Error).message}`);
       return { result, updatedLedger };
     }
 
-    const remoteMap = new Map<string, RemoteFileInfo>();
-    for (const rf of remoteFiles) {
-      remoteMap.set(rf.path, rf);
-    }
+    const remoteMap = new Map(remoteFiles.map((rf) => [rf.path, rf]));
+    const localMap = new Map(
+      this.app.vault.getFiles().filter((f) => isSyncablePath(f.path)).map((f) => [f.path, f])
+    );
+    const queue = [...new Set([...remoteMap.keys(), ...localMap.keys(), ...Object.keys(ledger)])];
 
-    // 1. Scan local files
-    const localFiles = this.app.vault.getFiles().filter((f) => this.isSyncablePath(f.path));
-    const localMap = new Map<string, TFile>();
-    for (const lf of localFiles) {
-      localMap.set(lf.path, lf);
-    }
-
-    // 2. Process Remote Files (Pull, Conflict, or Local-Delete)
-    for (const [path, rf] of remoteMap) {
-      const localFile = localMap.get(path);
-      const prevSync = updatedLedger[path];
-
-      if (!localFile) {
-        if (prevSync) {
-          // File was previously synced, but now deleted locally -> delete on remote
+    // A few files at a time: one request each, but not one round trip after another.
+    await Promise.all(
+      Array.from({ length: 4 }, async () => {
+        for (let path = queue.pop(); path !== undefined; path = queue.pop()) {
           try {
-            await this.deleteRemoteFile(workspaceId, path);
-            delete updatedLedger[path];
-            result.deleted++;
-          } catch (e: any) {
-            result.errors.push(`Failed to delete remote ${path}: ${e.message}`);
-          }
-        } else {
-          // Brand new remote file -> download
-          try {
-            const buf = await this.downloadFile(workspaceId, path);
-            const parent = path.substring(0, path.lastIndexOf('/'));
-            if (parent && !this.app.vault.getAbstractFileByPath(parent)) {
-              await this.app.vault.createFolder(parent);
-            }
-            const isText = path.endsWith('.md') || path.endsWith('.txt') || path.endsWith('.json') || path.endsWith('.canvas') || path.endsWith('.csv');
-            let created: TFile;
-            if (isText) {
-              const text = new TextDecoder().decode(buf);
-              created = await this.app.vault.create(path, text);
-            } else {
-              created = await this.app.vault.createBinary(path, buf);
-            }
-            updatedLedger[path] = {
-              localMtime: Math.floor(created.stat.mtime / 1000),
-              remoteMtime: rf.mtime
-            };
-            result.pulled++;
-          } catch (e: any) {
-            result.errors.push(`Failed to pull ${path}: ${e.message}`);
+            await this.syncPath(path, localMap.get(path), remoteMap.get(path), updatedLedger, result);
+          } catch (e) {
+            result.errors.push(`${path}: ${(e as Error).message}`);
           }
         }
-      } else {
-        // Exists both locally and remotely
-        const localSecs = Math.floor(localFile.stat.mtime / 1000);
-        const remoteSecs = rf.mtime;
-
-        if (!prevSync) {
-          // First time tracking: if identical mtime or local newer, push; else pull
-          if (localSecs > remoteSecs) {
-            try {
-              const buf = await this.app.vault.readBinary(localFile);
-              await this.uploadFile(workspaceId, path, buf);
-              updatedLedger[path] = { localMtime: localSecs, remoteMtime: localSecs };
-              result.pushed++;
-            } catch (e: any) {
-              result.errors.push(`Failed to push ${path}: ${e.message}`);
-            }
-          } else if (remoteSecs > localSecs) {
-            try {
-              const buf = await this.downloadFile(workspaceId, path);
-              await this.app.vault.modifyBinary(localFile, buf);
-              updatedLedger[path] = { localMtime: Math.floor(localFile.stat.mtime / 1000), remoteMtime: remoteSecs };
-              result.pulled++;
-            } catch (e: any) {
-              result.errors.push(`Failed to pull ${path}: ${e.message}`);
-            }
-          } else {
-            updatedLedger[path] = { localMtime: localSecs, remoteMtime: remoteSecs };
-          }
-        } else {
-          const localChanged = localSecs > prevSync.localMtime;
-          const remoteChanged = remoteSecs > prevSync.remoteMtime;
-
-          if (localChanged && remoteChanged) {
-            // CONFLICT! Both modified independently since last sync.
-            result.conflicts++;
-            try {
-              const remoteBuf = await this.downloadFile(workspaceId, path);
-              const localBuf = await this.app.vault.readBinary(localFile);
-
-              // Date stamp for conflict filename
-              const dateStr = new Date().toISOString().slice(0, 10);
-              const dotIdx = path.lastIndexOf('.');
-              const baseName = dotIdx !== -1 ? path.slice(0, dotIdx) : path;
-              const ext = dotIdx !== -1 ? path.slice(dotIdx) : '';
-              const conflictPath = `${baseName}.conflict-phone-${dateStr}${ext}`;
-
-              if (remoteSecs >= localSecs) {
-                // Remote is newer: keep remote as primary, save local copy as conflict
-                await this.app.vault.createBinary(conflictPath, localBuf);
-                await this.app.vault.modifyBinary(localFile, remoteBuf);
-              } else {
-                // Local is newer: keep local as primary, save remote copy as conflict
-                await this.app.vault.createBinary(conflictPath, remoteBuf);
-                await this.uploadFile(workspaceId, path, localBuf);
-              }
-
-              updatedLedger[path] = {
-                localMtime: Math.floor(localFile.stat.mtime / 1000),
-                remoteMtime: Math.max(localSecs, remoteSecs)
-              };
-
-              new Notice(`⚠️ Sync conflict on "${path}" — conflict copy created.`);
-            } catch (e: any) {
-              result.errors.push(`Conflict resolution failed for ${path}: ${e.message}`);
-            }
-          } else if (remoteChanged) {
-            // Remote changed only -> pull
-            try {
-              const buf = await this.downloadFile(workspaceId, path);
-              await this.app.vault.modifyBinary(localFile, buf);
-              updatedLedger[path] = {
-                localMtime: Math.floor(localFile.stat.mtime / 1000),
-                remoteMtime: remoteSecs
-              };
-              result.pulled++;
-            } catch (e: any) {
-              result.errors.push(`Failed to pull ${path}: ${e.message}`);
-            }
-          } else if (localChanged) {
-            // Local changed only -> push
-            try {
-              const buf = await this.app.vault.readBinary(localFile);
-              await this.uploadFile(workspaceId, path, buf);
-              updatedLedger[path] = {
-                localMtime: localSecs,
-                remoteMtime: localSecs
-              };
-              result.pushed++;
-            } catch (e: any) {
-              result.errors.push(`Failed to push ${path}: ${e.message}`);
-            }
-          }
-        }
-      }
-    }
-
-    // 3. Process Local Files Not in Remote Manifest (New Local Files or Remote Deletions)
-    for (const [path, localFile] of localMap) {
-      if (!remoteMap.has(path)) {
-        const prevSync = updatedLedger[path];
-        if (prevSync) {
-          // Was previously synced, now gone from remote -> delete locally
-          try {
-            await this.app.vault.delete(localFile);
-            delete updatedLedger[path];
-            result.deleted++;
-          } catch (e: any) {
-            result.errors.push(`Failed to delete local ${path}: ${e.message}`);
-          }
-        } else {
-          // Brand new local file -> upload to remote
-          try {
-            const buf = await this.app.vault.readBinary(localFile);
-            await this.uploadFile(workspaceId, path, buf);
-            const localSecs = Math.floor(localFile.stat.mtime / 1000);
-            updatedLedger[path] = {
-              localMtime: localSecs,
-              remoteMtime: localSecs
-            };
-            result.pushed++;
-          } catch (e: any) {
-            result.errors.push(`Failed to push ${path}: ${e.message}`);
-          }
-        }
-      }
-    }
+      })
+    );
 
     return { result, updatedLedger };
+  }
+
+  /**
+   * A side changed if it differs from the ledger (edited, created or deleted). A change on one side
+   * is copied to the other. When both changed, the edited file always survives: the laptop's copy
+   * wins the path (the agents work there), and the phone's, unless identical, is kept beside it.
+   */
+  private async syncPath(path: string, local: TFile | undefined, remote: RemoteFileInfo | undefined, ledger: SyncLedger, result: SyncResult) {
+    const vault = this.app.vault;
+    const prev = ledger[path];
+    const localChanged = prev ? local?.stat.mtime !== prev.localMtime : !!local;
+    const remoteChanged = prev ? remote?.mtime !== prev.remoteMtime : !!remote;
+    if (!localChanged && !remoteChanged) return;
+
+    if (local && remote && localChanged && remoteChanged) {
+      const theirs = await this.download(path);
+      const mine = await vault.readBinary(local);
+      if (!sameBytes(theirs, mine)) {
+        const dot = path.lastIndexOf('.');
+        const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '');
+        await vault.createBinary(normalizePath(`${path.slice(0, dot)}.conflict-phone-${stamp}${path.slice(dot)}`), mine);
+        await vault.modifyBinary(local, theirs);
+        result.conflicts++;
+        new Notice(`⚠️ Sync conflict on "${path}" — kept the laptop's version, and yours as a conflict copy.`);
+      }
+      ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime };
+    } else if (remoteChanged && (remote || !localChanged)) {
+      if (remote) {
+        const data = await this.download(path);
+        if (local) {
+          await vault.modifyBinary(local, data);
+        } else {
+          const parent = path.substring(0, path.lastIndexOf('/'));
+          if (parent && !vault.getFolderByPath(parent)) {
+            await vault.createFolder(parent).catch(() => {
+              // Another transfer may be creating the same folder.
+            });
+          }
+          await vault.createBinary(path, data);
+        }
+        ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime };
+        result.pulled++;
+      } else {
+        // Into the user's trash (Obsidian's or the system's, per their setting), never gone for good.
+        await this.app.fileManager.trashFile(local);
+        delete ledger[path];
+        result.deleted++;
+      }
+    } else if (local) {
+      const localMtime = local.stat.mtime;
+      const res = await this.request('POST', 'file', path, await vault.readBinary(local));
+      ledger[path] = { localMtime, remoteMtime: (res.json as { mtime: number }).mtime };
+      result.pushed++;
+    } else {
+      if (remote) {
+        await this.request('DELETE', 'file', path);
+        result.deleted++;
+      }
+      delete ledger[path];
+    }
+  }
+
+  /**
+   * The file's mtime as just written. Read from the adapter: the vault's cached `TFile.stat` may not
+   * reflect a write yet, and recording a stale one would make the next sync push the file back.
+   */
+  private async localMtime(path: string): Promise<number> {
+    const stat = await this.app.vault.adapter.stat(path);
+    if (!stat) throw new Error('missing right after writing it');
+    return stat.mtime;
+  }
+
+  private async download(path: string): Promise<ArrayBuffer> {
+    return (await this.request('GET', 'file', path)).arrayBuffer;
   }
 }
