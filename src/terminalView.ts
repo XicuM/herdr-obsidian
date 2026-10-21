@@ -218,9 +218,6 @@ export class HerdrTerminalView extends ItemView {
     if (effectiveBg !== this.currentDetectedBg) {
       this.currentDetectedBg = effectiveBg;
       this.contentEl.style.setProperty('--herdr-tab-bg', effectiveBg);
-      if (this.terminalContainerEl) {
-        this.terminalContainerEl.style.backgroundColor = effectiveBg;
-      }
       if (this.terminal.options.theme?.background !== effectiveBg) {
         this.terminal.options.theme = {
           ...baseTheme,

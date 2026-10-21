@@ -40,6 +40,14 @@ The plugin connects only to the herdr-bridge you configure (by default `127.0.0.
 
 It sends nothing anywhere else, and has no telemetry. It doesn't access files outside the vault.
 
+### Requires an external program
+
+The plugin does nothing on its own: it needs [herdr](https://herdr.dev) and herdr-bridge, which you install and run yourself. No account or payment is involved.
+
+### What it writes in your vault
+
+Only if you accept the one-time offer (or run **Install agent skill**), the plugin writes `.claude/skills/herdr-open/SKILL.md`, a short note telling agents how to ask Obsidian to open a note. It is written with Obsidian's adapter API because Obsidian's vault API doesn't see hidden folders. Vault sync, with a bridge on another machine, creates and updates notes in the vault.
+
 ## Features
 
 ### Embedded terminal
