@@ -7,6 +7,7 @@ import { AgentAttender } from './notifier';
 import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherModal';
 import { HerdrTerminalView, HERDR_VIEW_TYPE } from './terminalView';
 import { RenameTabModal } from './renameModal';
+import { criticMarkupEditor, renderCriticMarkup, resolveAll, changeAt } from './criticMarkup';
 
 export const HERDR_OBSIDIAN_SESSION = 'herdr-obsidian';
 /** herdr-bridge on this machine, where the desktop app finds it unless told otherwise. */
@@ -43,11 +44,14 @@ const DEFAULT_SETTINGS: HerdrSettings = {
 const AGENT_SKILL_PATH = '.claude/skills/herdr-open/SKILL.md';
 const AGENT_SKILL = `---
 name: herdr-open
-description: Show a note, heading or line to the user in their Obsidian window. Use when pointing at a note instead of pasting it.
+description: Show a note, heading or line to the user in their Obsidian window, or suggest edits to their notes. Use when pointing at a note instead of pasting it, or when proposing changes to text.
 ---
 
 Run \`herdr-bridge obsidian open <path>[#heading] [--line N]\`, with the path relative to your working directory.
 Use it to show what you found or changed. Never use \`mv\` to rename notes: it breaks wikilinks.
+
+To suggest a change to the user's text instead of editing it, write CriticMarkup in the note: \`{++added++}\`, \`{--deleted--}\`, \`{~~old~>new~~}\`, \`{==highlighted==}\`, \`{>>comment<<}\`.
+The user accepts or rejects each one in Obsidian. Leave the surrounding text untouched.
 `;
 
 export default class HerdrPlugin extends Plugin {
@@ -213,6 +217,25 @@ export default class HerdrPlugin extends Plugin {
       name: 'Install agent skill (let agents open notes)',
       callback: () => void this.installAgentSkill()
     });
+
+    // CriticMarkup suggestions: rendered in Live Preview and Reading view, resolved from the editor.
+    this.registerEditorExtension(criticMarkupEditor);
+    this.registerMarkdownPostProcessor(renderCriticMarkup);
+    for (const accept of [true, false]) {
+      this.addCommand({
+        id: accept ? 'accept-suggestion' : 'reject-suggestion',
+        name: accept ? 'Accept suggestion (selection or at cursor)' : 'Reject suggestion (selection or at cursor)',
+        editorCallback: (editor) => {
+          if (editor.somethingSelected()) {
+            editor.replaceSelection(resolveAll(editor.getSelection(), accept));
+            return;
+          }
+          const change = changeAt(editor.getValue(), editor.posToOffset(editor.getCursor()));
+          if (!change) new Notice('No suggestion at the cursor.');
+          else editor.replaceRange(change.replacement(accept), editor.offsetToPos(change.from), editor.offsetToPos(change.to));
+        }
+      });
+    }
 
     this.addSettingTab(new HerdrSettingTab(this.app, this));
 

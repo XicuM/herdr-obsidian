@@ -806,3 +806,9 @@
   color: var(--text-on-accent);
 }
 
+
+/* CriticMarkup suggestions */
+.herdr-critic-add { background: rgba(var(--color-green-rgb), 0.2); }
+.herdr-critic-del { background: rgba(var(--color-red-rgb), 0.2); text-decoration: line-through; }
+.herdr-critic-mark { background: var(--text-highlight-bg); }
+.herdr-critic-comment { color: var(--text-muted); font-style: italic; background: var(--background-secondary-alt); }

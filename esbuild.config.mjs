@@ -18,6 +18,8 @@ const context = await esbuild.context({
   external: [
     'obsidian',
     'electron',
+    '@codemirror/state',
+    '@codemirror/view',
     ...builtinModules,
     ...builtinModules.map(m => `node:${m}`)
   ],
