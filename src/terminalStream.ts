@@ -1,7 +1,9 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
-import * as os from 'os';
-import * as path from 'path';
-import * as fs from 'fs';
+import { Platform } from 'obsidian';
+
+const os: typeof import('os') | null = Platform.isDesktop ? require('os') : null;
+const path: typeof import('path') | null = Platform.isDesktop ? require('path') : null;
+const fs: typeof import('fs') | null = Platform.isDesktop ? require('fs') : null;
+const spawn = Platform.isDesktop ? require('child_process').spawn : null;
 
 export interface TerminalStreamCallbacks {
   onData: (data: Uint8Array) => void;
@@ -10,7 +12,7 @@ export interface TerminalStreamCallbacks {
 }
 
 export class HerdrTerminalStream {
-  private child: ChildProcessWithoutNullStreams | null = null;
+  private child: any = null;
   private buffer = '';
   private isClosed = false;
 
@@ -21,6 +23,10 @@ export class HerdrTerminalStream {
   ) {}
 
   start(cols: number, rows: number) {
+    if (!Platform.isDesktop || !spawn || !os || !path) {
+      this.callbacks.onError('Local terminal stream is only supported on Desktop');
+      return;
+    }
     const sessionArgs = this.session ? ['--session', this.session] : [];
     const args = [
       ...sessionArgs,

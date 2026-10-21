@@ -1,8 +1,9 @@
-import { ItemView, WorkspaceLeaf, Menu, Notice, TFile, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Menu, Notice, TFile, setIcon, Platform } from 'obsidian';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Conversation } from './resolver';
 import { HerdrTerminalStream } from './terminalStream';
+import { BridgeTerminalStream } from './bridgeTerminalStream';
 import { getTerminalTheme } from './terminalTheme';
 import type HerdrPlugin from './main';
 
@@ -31,7 +32,7 @@ export class HerdrTerminalView extends ItemView {
   private plugin: HerdrPlugin;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
-  private stream: HerdrTerminalStream | null = null;
+  private stream: HerdrTerminalStream | BridgeTerminalStream | null = null;
   private streamSession = '';
   private streamErrored = false;
   private currentPaneId: string | null = null;
@@ -77,6 +78,35 @@ export class HerdrTerminalView extends ItemView {
 
     this.tabBarEl = container.createDiv({ cls: 'herdr-tab-bar' });
     this.terminalContainerEl = container.createDiv({ cls: 'herdr-terminal-container' });
+
+    if (Platform.isMobile) {
+      const keyBar = container.createDiv({ cls: 'herdr-mobile-keybar' });
+      const addKey = (label: string, seq: string | (() => void)) => {
+        const btn = keyBar.createDiv({ cls: 'herdr-mobile-key', text: label });
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (typeof seq === 'function') {
+            seq();
+          } else {
+            this.stream?.sendInput(seq);
+          }
+          this.terminal?.focus();
+        });
+      };
+
+      addKey('Esc', '\x1b');
+      addKey('Tab', '\t');
+      addKey('Ctrl+C', '\x03');
+      addKey('↑', '\x1b[A');
+      addKey('↓', '\x1b[B');
+      addKey('Clear', '\x0c');
+      addKey('Paste', async () => {
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text) this.stream?.sendInput(text);
+        } catch {}
+      });
+    }
 
     // Only swallow wheel events when actively streaming remote content.
     // When the stream is down, let the event propagate so native scroll still works.
@@ -780,7 +810,7 @@ export class HerdrTerminalView extends ItemView {
     const cols = this.terminal.cols || 80;
     const rows = this.terminal.rows || 24;
 
-    this.stream = new HerdrTerminalStream(paneId, this.plugin.getSessionName(), {
+    this.stream = this.plugin.createTerminalStream(paneId, {
       onData: (data) => {
         this.terminal?.write(data);
       },

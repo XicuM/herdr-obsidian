@@ -1,5 +1,18 @@
-import * as path from 'path';
-import { HerdrClient, Snapshot, AgentStatus, Workspace } from './herdrClient';
+import { Snapshot, AgentStatus, Workspace } from './herdrClient';
+
+export interface IWorkspaceCreator {
+  createWorkspace(cwd: string, label: string, focus?: boolean): Promise<{ workspace: Workspace }>;
+}
+
+function normPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function getBaseName(p: string): string {
+  const n = normPath(p);
+  const parts = n.split('/');
+  return parts.pop() || n;
+}
 
 export interface Conversation {
   tab_id: string;
@@ -26,21 +39,21 @@ export function compareConversationsByStatus(a: Conversation, b: Conversation): 
 }
 
 export class AgentResolver {
-  constructor(private client: HerdrClient) {}
+  constructor(private client: IWorkspaceCreator) {}
 
   /**
    * Find the singleton workspace for a vault folder.
    * Matches by folder path on pane cwd or matching label.
    */
   findWorkspaceForFolder(snapshot: Snapshot, folderPath: string): Workspace | null {
-    const norm = path.resolve(folderPath);
-    const folderBase = path.basename(norm);
+    const norm = normPath(folderPath);
+    const folderBase = getBaseName(norm);
 
     // 1. Check workspace with matching label and at least one pane in this folder
     const matchingByLabel = (snapshot.workspaces || []).filter((w) => w.label === folderBase);
     for (const w of matchingByLabel) {
       const hasPaneInFolder = (snapshot.panes || []).some(
-        (p) => p.workspace_id === w.workspace_id && path.resolve(p.cwd || p.foreground_cwd || '') === norm
+        (p) => p.workspace_id === w.workspace_id && normPath(p.cwd || p.foreground_cwd || '') === norm
       );
       if (hasPaneInFolder) return w;
     }
@@ -48,7 +61,7 @@ export class AgentResolver {
     // 2. Check any workspace where any pane has cwd matching folder path
     for (const w of (snapshot.workspaces || [])) {
       const hasPaneInFolder = (snapshot.panes || []).some(
-        (p) => p.workspace_id === w.workspace_id && path.resolve(p.cwd || p.foreground_cwd || '') === norm
+        (p) => p.workspace_id === w.workspace_id && normPath(p.cwd || p.foreground_cwd || '') === norm
       );
       if (hasPaneInFolder) return w;
     }
@@ -65,8 +78,8 @@ export class AgentResolver {
   async ensureWorkspace(folderPath: string, snapshot: Snapshot): Promise<string> {
     const existing = this.findWorkspaceForFolder(snapshot, folderPath);
     if (existing) return existing.workspace_id;
-    const label = path.basename(path.resolve(folderPath));
-    const created = await this.client.createWorkspace(path.resolve(folderPath), label, false);
+    const label = getBaseName(folderPath);
+    const created = await this.client.createWorkspace(normPath(folderPath), label, false);
     return created.workspace.workspace_id;
   }
 

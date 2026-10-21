@@ -1,8 +1,11 @@
-import * as net from 'net';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { spawn } from 'child_process';
+import { Platform } from 'obsidian';
+
+// Dynamically resolve Node builtins only on desktop Electron
+const net: typeof import('net') | null = Platform.isDesktop ? require('net') : null;
+const fs: typeof import('fs') | null = Platform.isDesktop ? require('fs') : null;
+const os: typeof import('os') | null = Platform.isDesktop ? require('os') : null;
+const path: typeof import('path') | null = Platform.isDesktop ? require('path') : null;
+const spawn = Platform.isDesktop ? require('child_process').spawn : null;
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
@@ -70,19 +73,24 @@ export class HerdrClient {
 
   constructor(session = '') {
     this.session = session;
+    if (!Platform.isDesktop || !os || !path) {
+      this.socketPath = '';
+      return;
+    }
     const base = path.join(os.homedir(), '.config', 'herdr');
     const sockPath = session
       ? path.join(base, 'sessions', session, 'herdr.sock')
       : path.join(base, 'herdr.sock');
-    this.socketPath = process.env.HERDR_SOCKET_PATH || sockPath;
+    this.socketPath = (typeof process !== 'undefined' && process.env?.HERDR_SOCKET_PATH) || sockPath;
   }
 
   getSocketPath(): string {
-    if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
+    if (typeof process !== 'undefined' && process.env?.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
     return this.socketPath;
   }
 
   isAvailable(): boolean {
+    if (!Platform.isDesktop || !fs || !path) return false;
     try {
       const sockExists = fs.existsSync(this.getSocketPath());
       if (!sockExists) return false;
@@ -90,13 +98,13 @@ export class HerdrClient {
       if (
         fs.existsSync('/usr/bin/herdr') ||
         fs.existsSync('/usr/local/bin/herdr') ||
-        fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'herdr')) ||
-        fs.existsSync(path.join(os.homedir(), '.cargo', 'bin', 'herdr'))
+        (os && fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'herdr'))) ||
+        (os && fs.existsSync(path.join(os.homedir(), '.cargo', 'bin', 'herdr')))
       ) {
         return true;
       }
 
-      const pathEnv = process.env.PATH || '';
+      const pathEnv = (typeof process !== 'undefined' && process.env?.PATH) || '';
       const pathDirs = pathEnv.split(path.delimiter);
       for (const dir of pathDirs) {
         if (!dir) continue;
@@ -113,6 +121,7 @@ export class HerdrClient {
   }
 
   async ensureServerRunning(): Promise<boolean> {
+    if (!Platform.isDesktop || !fs || !path || !os || !spawn) return false;
     if (this.isAvailable()) return true;
     const sockPath = this.getSocketPath();
     if (fs.existsSync(sockPath)) return true;
@@ -124,7 +133,7 @@ export class HerdrClient {
       }
       const configPath = path.join(sessionDir, 'config.toml');
       const env = {
-        ...process.env,
+        ...(typeof process !== 'undefined' ? process.env : {}),
         ...(fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
       };
       const child = spawn('herdr', ['--session', this.session, 'server'], {
@@ -143,6 +152,9 @@ export class HerdrClient {
   }
 
   private async rawRequest(method: string, params: Record<string, unknown> = {}, timeoutMs = 15000): Promise<any> {
+    if (!Platform.isDesktop || !net || !fs) {
+      throw new Error('Local UNIX socket HerdrClient is only supported on Desktop');
+    }
     const sockPath = this.getSocketPath();
     if (!fs.existsSync(sockPath)) {
       await this.ensureServerRunning();
@@ -327,6 +339,9 @@ export class HerdrClient {
   }
 
   async subscribeEvents(cb: (evt: any) => void): Promise<() => void> {
+    if (!Platform.isDesktop || !net || !fs) {
+      return () => {};
+    }
     const sockPath = this.getSocketPath();
     if (!fs.existsSync(sockPath)) {
       await this.ensureServerRunning();

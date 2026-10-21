@@ -1,7 +1,9 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf } from 'obsidian';
-import * as os from 'os';
-import * as path from 'path';
+import { App, Plugin, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
 import { HerdrClient, Snapshot } from './herdrClient';
+import { RemoteBridgeClient } from './bridgeClient';
+import { HerdrTerminalStream, TerminalStreamCallbacks } from './terminalStream';
+import { BridgeTerminalStream } from './bridgeTerminalStream';
+import { VaultSync, SyncLedger } from './vaultSync';
 import { AgentResolver, Conversation } from './resolver';
 import { AgentAttender } from './notifier';
 import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherModal';
@@ -10,13 +12,17 @@ import { RenameTabModal } from './renameModal';
 
 export const HERDR_OBSIDIAN_SESSION = 'herdr-obsidian';
 
-interface HerdrSettings {
+export interface HerdrSettings {
   focusOnBlocked: boolean;
   themeMode: 'auto' | 'dark' | 'light';
   fontSize: number;
   refreshIntervalSeconds: number;
   addAtPrefixOnDrop: boolean;
   tabOrder?: string[];
+  bridgeHost: string;
+  bridgeToken: string;
+  autoSyncOnOpen: boolean;
+  syncLedger?: SyncLedger;
 }
 
 const DEFAULT_SETTINGS: HerdrSettings = {
@@ -25,12 +31,16 @@ const DEFAULT_SETTINGS: HerdrSettings = {
   fontSize: 14,
   refreshIntervalSeconds: 2,
   addAtPrefixOnDrop: true,
-  tabOrder: []
+  tabOrder: [],
+  bridgeHost: '',
+  bridgeToken: '',
+  autoSyncOnOpen: true,
+  syncLedger: {}
 };
 
 export default class HerdrPlugin extends Plugin {
   settings: HerdrSettings = DEFAULT_SETTINGS;
-  private client!: HerdrClient;
+  private client!: HerdrClient | RemoteBridgeClient;
   private resolver!: AgentResolver;
   private attender!: AgentAttender;
   private statusBarEl!: HTMLElement;
@@ -39,6 +49,23 @@ export default class HerdrPlugin extends Plugin {
   private convByTab = new Map<string, Conversation>();
   private currentActiveTabId?: string;
   private singletonWorkspaceId?: string;
+
+  public isRemoteClient(): boolean {
+    return Platform.isMobile || !!this.settings.bridgeHost;
+  }
+
+  public createTerminalStream(paneId: string, callbacks: TerminalStreamCallbacks) {
+    if (this.isRemoteClient()) {
+      return new BridgeTerminalStream(
+        this.settings.bridgeHost || '127.0.0.1:7788',
+        this.settings.bridgeToken,
+        HERDR_OBSIDIAN_SESSION,
+        paneId,
+        callbacks
+      );
+    }
+    return new HerdrTerminalStream(paneId, HERDR_OBSIDIAN_SESSION, callbacks);
+  }
 
   async onload() {
     await this.loadSettings();
@@ -147,10 +174,30 @@ export default class HerdrPlugin extends Plugin {
       callback: () => this.refreshState()
     });
 
+    this.addCommand({
+      id: 'sync-vault',
+      name: 'Sync Vault with Laptop',
+      callback: () => this.syncVault(true)
+    });
+
+    if (Platform.isMobile || this.isRemoteClient()) {
+      this.addRibbonIcon('refresh-cw', 'Sync Herdr Vault', () => {
+        this.syncVault(true);
+      });
+    }
+
     this.addSettingTab(new HerdrSettingTab(this.app, this));
 
     this.setupRefresh();
     this.refreshState();
+
+    if (this.settings.autoSyncOnOpen && this.isRemoteClient()) {
+      setTimeout(() => {
+        if (this.singletonWorkspaceId) {
+          this.syncVault(false);
+        }
+      }, 2000);
+    }
 
     this.subscribeEvents();
   }
@@ -175,7 +222,15 @@ export default class HerdrPlugin extends Plugin {
       } catch {}
       this.unsubscribeEvents = null;
     }
-    this.client = new HerdrClient(HERDR_OBSIDIAN_SESSION);
+    if (this.isRemoteClient()) {
+      this.client = new RemoteBridgeClient({
+        host: this.settings.bridgeHost || '127.0.0.1:7788',
+        token: this.settings.bridgeToken,
+        session: HERDR_OBSIDIAN_SESSION
+      });
+    } else {
+      this.client = new HerdrClient(HERDR_OBSIDIAN_SESSION);
+    }
     this.resolver = new AgentResolver(this.client);
     if (this.attender) {
       this.attender.updateConfig(this.settings);
@@ -195,7 +250,7 @@ export default class HerdrPlugin extends Plugin {
     if (adapter instanceof FileSystemAdapter) {
       return adapter.getBasePath();
     }
-    return os.homedir();
+    return this.app.vault.getName();
   }
 
   public getSessionName(): string {
@@ -506,6 +561,46 @@ export default class HerdrPlugin extends Plugin {
     }
   }
 
+  public async syncVault(manual = false): Promise<void> {
+    if (!this.settings.bridgeHost || !this.settings.bridgeToken) {
+      if (manual) {
+        new Notice('Herdr Bridge Host and Token are required for vault sync. Please configure them in Settings.');
+      }
+      return;
+    }
+
+    const ws = this.singletonWorkspaceId;
+    if (!ws) {
+      if (manual) new Notice('No active Herdr workspace found to sync with. Make sure Herdr is running on your laptop.');
+      return;
+    }
+
+    if (manual) {
+      new Notice('Syncing vault with laptop...');
+    }
+
+    try {
+      const syncer = new VaultSync(this.app, this.settings.bridgeHost, this.settings.bridgeToken, HERDR_OBSIDIAN_SESSION);
+      const { result, updatedLedger } = await syncer.sync(ws, this.settings.syncLedger || {});
+      this.settings.syncLedger = updatedLedger;
+      await this.saveSettings();
+
+      if (result.errors.length > 0) {
+        new Notice(`Sync completed with errors: ${result.errors[0]}`);
+      } else if (manual || result.pulled > 0 || result.pushed > 0 || result.conflicts > 0) {
+        new Notice(
+          `Vault synced: ${result.pulled} pulled, ${result.pushed} pushed${
+            result.conflicts ? `, ${result.conflicts} conflicts` : ''
+          }`
+        );
+      }
+    } catch (e: any) {
+      if (manual) {
+        new Notice(`Sync failed: ${e.message}`);
+      }
+    }
+  }
+
   public async focusVaultWorkspace() {
     try {
       const folder = this.getVaultFolderPath();
@@ -518,10 +613,11 @@ export default class HerdrPlugin extends Plugin {
   }
 
   public async diagnoseConnection() {
-    const socketPath = this.client.getSocketPath();
+    const endpoint = (this.client as any).getSocketPath ? (this.client as any).getSocketPath() : (this.client as any).getHost();
+    const mode = this.isRemoteClient() ? 'Remote Bridge (Tailscale / HTTP)' : 'Local UNIX Domain Socket';
     const available = this.client.isAvailable();
     const folder = this.getVaultFolderPath();
-    let detail = `Socket: ${socketPath}\nAvailable: ${available ? 'yes' : 'no'}\nVault folder: ${folder}`;
+    let detail = `Mode: ${mode}\nEndpoint: ${endpoint}\nAvailable: ${available ? 'yes' : 'no'}\nVault folder: ${folder}`;
     try {
       const snapshot = await this.client.snapshot();
       const ws = this.resolver.findWorkspaceForFolder(snapshot, folder);
@@ -650,6 +746,59 @@ class HerdrSettingTab extends PluginSettingTab {
           this.plugin.settings.addAtPrefixOnDrop = val;
           await this.plugin.saveSettings();
         })
+      );
+
+    containerEl.createEl('h3', { text: 'Remote Herdr Bridge (Tailscale / Mobile)' });
+
+    new Setting(containerEl)
+      .setName('Bridge host / IP')
+      .setDesc('Tailscale IP or host:port of your laptop running herdr-bridge, e.g. 100.85.12.34:7788.')
+      .addText((text) =>
+        text
+          .setPlaceholder('100.x.y.z:7788')
+          .setValue(this.plugin.settings.bridgeHost)
+          .onChange(async (val) => {
+            this.plugin.settings.bridgeHost = val.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Bridge auth token')
+      .setDesc('Bearer token printed by: herdr-bridge --print-token')
+      .addText((text) => {
+        text.inputEl.type = 'password';
+        text
+          .setPlaceholder('token')
+          .setValue(this.plugin.settings.bridgeToken)
+          .onChange(async (val) => {
+            this.plugin.settings.bridgeToken = val.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('Auto-sync on vault open')
+      .setDesc('Automatically sync notes and changes with your laptop when Obsidian opens.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoSyncOnOpen)
+          .onChange(async (val) => {
+            this.plugin.settings.autoSyncOnOpen = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Sync vault now')
+      .setDesc('Immediately pull remote updates and push local changes to your laptop workspace.')
+      .addButton((btn) =>
+        btn
+          .setButtonText('Sync Vault')
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.syncVault(true);
+          })
       );
   }
 }

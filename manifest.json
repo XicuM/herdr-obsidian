@@ -6,5 +6,5 @@
   "description": "Herdr AI coding agents inside Obsidian: embedded terminal tabs, live status, and file drag-and-drop.",
   "author": "XicuM",
   "authorUrl": "https://github.com/XicuM",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }
