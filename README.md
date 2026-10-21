@@ -2,7 +2,7 @@
 
 [![Obsidian 1.7.2+](https://img.shields.io/badge/Obsidian-1.7.2%2B-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md)
 [![Desktop and mobile](https://img.shields.io/badge/platform-desktop%20%7C%20mobile-4B5563)](#requirements)
-[![License: MIT](https://img.shields.io/badge/license-MIT-22C55E)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-22C55E)](https://www.gnu.org/licenses/gpl-3.0)
 
 > **Unofficial plugin.** This is a community plugin for [herdr](https://herdr.dev). It is not made, endorsed or supported by the herdr authors, nor by Obsidian.
 
@@ -200,4 +200,4 @@ Inspired by [herdr-vscode](https://github.com/XicuM/herdr-vscode) and the herdr 
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0-or-later](LICENSE)
