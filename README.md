@@ -28,7 +28,7 @@ Notes and agents, side by side — the herdr terminal sits in Obsidian's right s
 ## Requirements
 
 - [Obsidian](https://obsidian.md) 1.7.2+, desktop or mobile.
-- [herdr](https://herdr.dev) and [herdr-bridge](https://github.com/XicuM/herdr-mobile) on the machine where your agents run. The plugin talks to herdr only through herdr-bridge.
+- [herdr](https://herdr.dev) and [herdr-bridge](https://github.com/XicuM/herdr-bridge) on the machine where your agents run. The plugin talks to herdr only through herdr-bridge.
 - On a phone: a way to reach that machine, e.g. [Tailscale](https://tailscale.com).
 
 ### Network use
@@ -92,7 +92,7 @@ Dragging selected text inserts it directly, and multiline text is wrapped in bra
 
 ### Agents open notes in Obsidian
 
-The bridge can push `{"type":"open","vault":"Notes","path":"Note.md","heading":"Intro","line":7}` on `/ws/session`; the plugin then opens that note in Obsidian. Only existing files inside the vault open, and **Let agents open notes** turns it off. On first start with a local bridge, the plugin offers to write `.claude/skills/herdr-open/SKILL.md` (also **Install agent skill**), which tells agents to run `herdr-bridge obsidian open <path>[#heading] [--line N]`. It needs a herdr-bridge with `obsidian open` (herdr-mobile, `POST /api/obsidian/open`); the event carries the vault's name, and other vaults ignore it.
+The bridge can push `{"type":"open","vault":"Notes","path":"Note.md","heading":"Intro","line":7}` on `/ws/session`; the plugin then opens that note in Obsidian. Only existing files inside the vault open, and **Let agents open notes** turns it off. On first start with a local bridge, the plugin offers to write `.claude/skills/herdr-open/SKILL.md` (also **Install agent skill**), which tells agents to run `herdr-bridge obsidian open <path>[#heading] [--line N]`. It needs a herdr-bridge with `obsidian open` (see its [PROTOCOL.md](https://github.com/XicuM/herdr-bridge/blob/main/PROTOCOL.md)); the event carries the vault's name, and other vaults ignore it.
 
 ### Vault sync (with a bridge on another machine)
 
