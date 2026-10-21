@@ -114,8 +114,6 @@ cp main.js manifest.json styles.css "<vault>/.obsidian/plugins/herdr/"
 
 Then open **Settings → Community plugins**, reload the plugin list, and enable **Herdr**. On a phone, copy the same three files into each vault's `.obsidian/plugins/herdr/` folder.
 
-`main.js` is committed in this repository, so a source checkout without a build step works too.
-
 ## Getting started
 
 1. Run herdr-bridge where your agents run, and print its token there: `herdr-bridge --print-token`.
