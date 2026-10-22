@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Platform, requestUrl, notices, FileSystemAdapter } from 'obsidian';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import HerdrPlugin from '../src/main';
 import { AgentResolver } from '../src/resolver';
-import { AgentAttender } from '../src/notifier';
 import { TerminalStream } from '../src/terminalStream';
 
 const conv = (n: number, status = 'idle') => ({
@@ -19,8 +21,9 @@ beforeEach(async () => {
   Platform.isMobile = false;
   leaves = [];
   const app = {
-    vault: { adapter: {}, getName: () => 'vault', getFiles: () => [] },
+    vault: { adapter: {}, getName: () => 'vault', getFiles: () => [], getFileByPath: () => null },
     workspace: {
+      onLayoutReady: (cb: () => void) => cb(),
       getLeavesOfType: () => leaves,
       getRightLeaf: () => ({ setViewState: vi.fn() }),
       revealLeaf: vi.fn()
@@ -38,7 +41,6 @@ beforeEach(async () => {
   };
   plugin.client = client;
   plugin.resolver = new AgentResolver(client);
-  plugin.attender = new AgentAttender(plugin.settings);
   plugin.saveSettings = vi.fn();
 });
 afterEach(() => vi.mocked(requestUrl).mockReset());
@@ -171,6 +173,91 @@ describe('syncVault', () => {
     expect(plugin.settings.syncLedger).toEqual({ 'a.png': { localMtime: 5000, remoteMtime: 4 } });
     expect(plugin.saveSettings).toHaveBeenCalled();
     expect(notices.at(-1)).toBe('Vault synced: 1 pulled, 0 pushed');
+  });
+
+  it('runs one sync at a time: calls made meanwhile share one follow-up, a whole-vault one covering pushed files', async () => {
+    plugin.settings.bridgeHost = 'laptop';
+    plugin.settings.bridgeToken = 't';
+    const urls: string[] = [];
+    vi.mocked(requestUrl).mockImplementation((async ({ url }: any) => {
+      urls.push(new URL(url).pathname.split('/').pop()!);
+      return { status: 200, json: [] };
+    }) as any);
+    // Two calls before the first starts share it.
+    await Promise.all([plugin.syncVault(false), plugin.syncVault(true)]);
+    expect(urls).toEqual(['manifest']);
+    // Calls while one runs wait for it, then run once: a whole-vault sync, needing no file of its own.
+    const running = plugin.syncVault(false);
+    await Promise.resolve();
+    const followUps = [plugin.syncVault(false, [{ path: 'a.md', deleted: true }]), plugin.syncVault(false)];
+    await Promise.all([running, ...followUps]);
+    expect(urls).toEqual(['manifest', 'manifest', 'manifest']);
+  });
+});
+
+describe('live vault sync', () => {
+  let push: (evt: any) => void;
+  let syncs: any[][];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    plugin.settings.bridgeHost = 'laptop';
+    plugin.settings.bridgeToken = 't';
+    client.subscribeEvents = vi.fn(async (cb: any) => {
+      push = cb;
+      return vi.fn();
+    });
+    syncs = [];
+    plugin.runSync = vi.fn(async (...args: any[]) => {
+      syncs.push(args);
+    });
+    plugin.subscribeEvents();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('syncs the whole vault on each (re)connect, and just the files the bridge pushes for this vault', async () => {
+    push({ type: 'connected' });
+    const files = [{ path: 'a.md', mtime: 1, mtime_ms: 1000, size: 1 }];
+    await vi.runAllTimersAsync();
+    push({ type: 'vault_changed', vault: 'vault', files });
+    push({ type: 'vault_changed', vault: 'Other', files });
+    await vi.runAllTimersAsync();
+    expect(syncs).toEqual([[false, undefined], [false, files]]);
+  });
+
+  it('does nothing automatically with automatic sync off', async () => {
+    plugin.settings.autoSyncOnOpen = false;
+    push({ type: 'connected' });
+    push({ type: 'vault_changed', vault: 'vault', files: [] });
+    plugin.localEdited('a.md');
+    await vi.runAllTimersAsync();
+    expect(syncs).toEqual([]);
+  });
+
+  it('pushes phone edits once they settle, ignoring the writes of a sync itself', async () => {
+    const files: Record<string, any> = { 'pulled.md': { stat: { mtime: 5 } }, 'typed.md': { stat: { mtime: 9 } } };
+    plugin.app.vault.getFileByPath = (p: string) => files[p] ?? null;
+    plugin.settings.syncLedger = { 'pulled.md': { localMtime: 5, remoteMtime: 1 }, 'typed.md': { localMtime: 7, remoteMtime: 1 } };
+
+    plugin.localEdited('pulled.md');
+    plugin.localEdited('.obsidian/workspace.json');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(syncs).toEqual([]);
+
+    plugin.localEdited('typed.md');
+    await vi.advanceTimersByTimeAsync(2000);
+    plugin.localEdited('typed.md'); // still typing: the wait starts over
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(syncs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(syncs).toEqual([[false, undefined]]);
+  });
+
+  it('pushes a phone deletion of a synced file', async () => {
+    plugin.settings.syncLedger = { 'gone.md': { localMtime: 5, remoteMtime: 1 } };
+    plugin.localEdited('gone.md');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(syncs).toEqual([[false, undefined]]);
   });
 });
 
@@ -313,11 +400,23 @@ describe('agent open requests', () => {
     expect(notices).toHaveLength(2);
   });
 
-  it('installs the skill inside the vault', async () => {
-    const adapter = { mkdir: vi.fn(async () => {}), write: vi.fn(async () => {}) };
-    plugin.app.vault.adapter = adapter;
+  it('offers the skill once, and a no writes nothing', async () => {
+    plugin.installAgentSkill = vi.fn();
+    expect(plugin.wantsSkillOffer()).toBe(true);
+    await plugin.answerSkillOffer(false);
+    expect(plugin.wantsSkillOffer()).toBe(false);
+    expect(plugin.installAgentSkill).not.toHaveBeenCalled();
+  });
+
+  it('installs the skill in .agents, linked from .claude over an older copy', async () => {
+    const vault = mkdtempSync(join(tmpdir(), 'vault-'));
+    mkdirSync(join(vault, '.claude/skills/herdr-open'), { recursive: true });
+    plugin.app.vault.adapter = Object.assign(new FileSystemAdapter(vault), {
+      mkdir: async (p: string) => void mkdirSync(join(vault, p), { recursive: true }),
+      write: async (p: string, data: string) => writeFileSync(join(vault, p), data)
+    });
     await plugin.installAgentSkill();
-    expect(adapter.mkdir).toHaveBeenCalledWith('.claude/skills/herdr-open');
-    expect(adapter.write.mock.calls[0][0]).toBe('.claude/skills/herdr-open/SKILL.md');
+    expect(readlinkSync(join(vault, '.claude/skills/herdr-open'))).toBe('../../.agents/skills/herdr-open');
+    expect(readFileSync(join(vault, '.claude/skills/herdr-open/SKILL.md'), 'utf8')).toContain('name: herdr-open');
   });
 });

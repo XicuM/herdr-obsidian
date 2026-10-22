@@ -27,6 +27,9 @@ function trackPhysicalModifiers(): void {
   }, true);
 }
 
+/** The local tab asking to install the agent skill; herdr knows nothing of it. */
+const SKILL_OFFER_TAB = 'herdr-obsidian:skill-offer';
+
 export class HerdrTerminalView extends ItemView {
   private plugin: HerdrPlugin;
   private terminal: Terminal | null = null;
@@ -39,6 +42,7 @@ export class HerdrTerminalView extends ItemView {
 
   private tabBarEl!: HTMLElement;
   private terminalContainerEl!: HTMLElement;
+  private skillOfferEl!: HTMLElement;
   private resizeObserver!: ResizeObserver;
   private themeObserver!: MutationObserver;
   private wheelAccumulator = 0;
@@ -66,7 +70,7 @@ export class HerdrTerminalView extends ItemView {
   }
 
   getIcon(): string {
-    return 'terminal';
+    return 'bot';
   }
 
   async onOpen() {
@@ -165,6 +169,16 @@ export class HerdrTerminalView extends ItemView {
     });
     this.themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+
+    this.skillOfferEl = this.terminalContainerEl.createDiv({ cls: 'herdr-skill-offer' });
+    this.skillOfferEl.createEl('h3', { text: 'Let agents open notes?' });
+    this.skillOfferEl.createEl('p', {
+      text: 'Writes the herdr-open skill into this vault, so agents can show you notes and suggest edits in Obsidian.'
+    });
+    const answers = this.skillOfferEl.createDiv({ cls: 'herdr-skill-offer-buttons' });
+    answers.createEl('button', { cls: 'mod-cta', text: 'Yes' }).addEventListener('click', () => void this.plugin.answerSkillOffer(true));
+    answers.createEl('button', { text: 'No' }).addEventListener('click', () => void this.plugin.answerSkillOffer(false));
+    if (this.plugin.wantsSkillOffer()) this.currentTabId = SKILL_OFFER_TAB;
 
     this.renderTabs();
   }
@@ -570,9 +584,24 @@ export class HerdrTerminalView extends ItemView {
     this.tabBarEl.empty();
 
     const convs = this.plugin.getConversations();
+    const offering = this.plugin.wantsSkillOffer();
+    if (this.currentTabId === SKILL_OFFER_TAB && !offering) this.currentTabId = null;
+    this.skillOfferEl?.toggle(this.currentTabId === SKILL_OFFER_TAB);
+
+    if (offering) {
+      const isActive = this.currentTabId === SKILL_OFFER_TAB;
+      const tabEl = this.tabBarEl.createDiv({ cls: `herdr-tab-item ${isActive ? 'is-active' : ''}` });
+      tabEl.createDiv({ cls: 'herdr-tab-inner' }).createDiv({ cls: 'herdr-tab-label', text: 'Agent skill' });
+      tabEl.setAttribute('role', 'tab');
+      tabEl.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      tabEl.addEventListener('click', () => {
+        this.currentTabId = SKILL_OFFER_TAB;
+        this.renderTabs();
+      });
+    }
 
     // Auto-select first tab if none active
-    if (convs.length > 0 && (!this.currentTabId || !convs.some((c) => c.tab_id === this.currentTabId))) {
+    if (this.currentTabId !== SKILL_OFFER_TAB && convs.length > 0 && (!this.currentTabId || !convs.some((c) => c.tab_id === this.currentTabId))) {
       this.currentTabId = convs[0].tab_id;
       this.currentPaneId = convs[0].pane_id;
       this.attachToPane(convs[0].pane_id);
@@ -838,39 +867,59 @@ export class HerdrTerminalView extends ItemView {
   }
 
   private handleDrop(e: DragEvent) {
+    this.send(() => this.resolveDropPayload(e));
+  }
+
+  /** Points the active tab's agent at lines `start`-`end` (1-based) of a vault file. */
+  public sendReference(path: string, start: number, end: number) {
+    this.send(() => this.formatPath(path, start, end));
+  }
+
+  private send(resolve: () => string | null) {
     if (!this.stream?.isRunning) {
       new Notice('No active herdr terminal tab to drop into.');
       return;
     }
 
-    const payload = this.resolveDropPayload(e);
+    const payload = resolve();
     if (!payload) return;
 
     this.stream.sendInput(payload);
     this.terminal?.focus();
   }
 
-  private resolveDropPayload(e: DragEvent): string | null {
+  /** A file mention in the active agent's own syntax, optionally pointing at lines `start`-`end` (1-based). */
+  private formatPath(p: string, start?: number, end?: number): string {
     const agent = this.plugin.getConversations().find((c) => c.tab_id === this.currentTabId)?.agent ?? null;
-    const formatPath = (p: string) => {
-      const quoted = p.includes(' ') ? `"${p}"` : p;
-      if (!this.plugin.settings.addAtPrefixOnDrop || !agent) return `${quoted} `;
+    const lines = start === undefined ? '' : start === end ? `${start}` : `${start}-${end}`;
+    const colon = lines && `:${lines}`;
+    const hashL = lines && `#L${lines}`;
+    const quote = (s: string) => (p.includes(' ') ? `"${s}"` : s);
+    if (!this.plugin.settings.addAtPrefixOnDrop || !agent) return `${quote(p)}${colon} `;
 
-      switch (agent) {
-        // Codex's @ menu inserts a bare path; the @ is only the trigger character.
-        case 'codex':
-          return `${quoted} `;
-        // These agents insert @ followed by the unquoted path.
-        case 'agy':
-        case 'copilot':
-        case 'grok':
-        case 'opencode':
-          return `@${p} `;
-        // Claude, pi, and unknown harnesses quote paths that contain spaces.
-        default:
-          return `@${quoted} `;
-      }
-    };
+    switch (agent) {
+      // Codex's @ menu inserts a bare path; the @ is only the trigger character. No range syntax: path:line is its convention.
+      case 'codex':
+        return `${quote(p)}${colon} `;
+      // Copilot and grok attach @path:10-20; agy has no range syntax and reads it as text.
+      case 'agy':
+      case 'copilot':
+      case 'grok':
+        return `@${p}${colon} `;
+      // opencode's own VS Code extension sends @path#L10-20.
+      case 'opencode':
+        return `@${p}${hashL} `;
+      // pi quotes paths with spaces and has no range syntax.
+      case 'pi':
+        return `@${quote(p)}${colon} `;
+      // Claude (and unknown harnesses) parse @path#L10-20, with the range inside the quotes.
+      default:
+        return `@${quote(p + hashL)} `;
+    }
+  }
+
+
+  private resolveDropPayload(e: DragEvent): string | null {
 
     // 1. Check Obsidian's internal DragManager (dragging from File Explorer)
     // Obsidian internals: what its file explorer is dragging.
@@ -879,39 +928,39 @@ export class HerdrTerminalView extends ItemView {
     }).dragManager?.draggable;
     if (draggable) {
       if (draggable.type === 'file' && draggable.file?.path) {
-        return formatPath(draggable.file.path);
+        return this.formatPath(draggable.file.path);
       }
       if (draggable.type === 'files' && Array.isArray(draggable.files)) {
-        const paths = draggable.files.filter((f) => f?.path).map((f) => formatPath(f.path));
+        const paths = draggable.files.filter((f) => f?.path).map((f) => this.formatPath(f.path));
         if (paths.length > 0) return paths.join('');
       }
     }
 
     // 2. Check plain text (dragged selection from editor or reading view)
     const text = e.dataTransfer?.getData('text/plain');
-    if (text) {
-      // Check if it's an internal Obsidian wikilink: [[Target]] or [[Target#Heading]] or [[Target|Alias]]
-      const linkMatch = text.match(/^\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|[^\]]+)?\]\]$/);
-      if (linkMatch) {
-        const linkTarget = linkMatch[1];
-        const subpath = linkMatch[2];
-        const dest = this.plugin.app.metadataCache.getFirstLinkpathDest(linkTarget, '');
-        if (dest instanceof TFile) {
-          const fileRef = subpath ? `${dest.path}#${subpath}` : dest.path;
-          return formatPath(fileRef);
-        }
-        const fallback = linkTarget.endsWith('.md') ? linkTarget : `${linkTarget}.md`;
-        const fileRef = subpath ? `${fallback}#${subpath}` : fallback;
-        return formatPath(fileRef);
-      }
+    return text ? this.resolveTextPayload(text) : null;
+  }
 
-      // Raw text / paragraph: wrap in bracketed paste if multiline to avoid premature execution
-      if (text.includes('\n') || text.includes('\r')) {
-        return `\x1b[200~${text}\x1b[201~`;
+  private resolveTextPayload(text: string): string {
+    // Check if it's an internal Obsidian wikilink: [[Target]] or [[Target#Heading]] or [[Target|Alias]]
+    const linkMatch = text.match(/^\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|[^\]]+)?\]\]$/);
+    if (linkMatch) {
+      const linkTarget = linkMatch[1];
+      const subpath = linkMatch[2];
+      const dest = this.plugin.app.metadataCache.getFirstLinkpathDest(linkTarget, '');
+      if (dest instanceof TFile) {
+        const fileRef = subpath ? `${dest.path}#${subpath}` : dest.path;
+        return this.formatPath(fileRef);
       }
-      return text;
+      const fallback = linkTarget.endsWith('.md') ? linkTarget : `${linkTarget}.md`;
+      const fileRef = subpath ? `${fallback}#${subpath}` : fallback;
+      return this.formatPath(fileRef);
     }
 
-    return null;
+    // Raw text / paragraph: wrap in bracketed paste if multiline to avoid premature execution
+    if (text.includes('\n') || text.includes('\r')) {
+      return `\x1b[200~${text}\x1b[201~`;
+    }
+    return text;
   }
 }

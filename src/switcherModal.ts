@@ -4,7 +4,7 @@ import { HARNESS_KINDS } from './herdrClient';
 
 export interface ActionItem {
   id: string;
-  type: 'conversation' | 'new_shell' | 'refresh' | 'close_conversation';
+  type: 'conversation' | 'new_shell' | 'close_conversation' | 'open_settings';
   title: string;
   description: string;
   conv?: Conversation;
@@ -30,7 +30,7 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
           id: c.tab_id,
           type: 'close_conversation',
           title: `Close ${c.label}`,
-          description: `${c.agent ? c.agent + ' • ' : ''}${c.status}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
+          description: `${c.agent && c.agent !== c.label ? c.agent + ' • ' : ''}${c.status}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
           conv: c
         };
       });
@@ -44,25 +44,24 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
         id: c.tab_id,
         type: 'conversation',
         title: c.label,
-        description: `${c.agent ? c.agent + ' • ' : ''}${c.status.toUpperCase()}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
+        description: `${c.agent && c.agent !== c.label ? c.agent + ' • ' : ''}${c.status.toUpperCase()}${c.status === 'blocked' ? ' — waiting for input' : ''}`,
         conv: c
       });
     }
 
-    this.items.push(
-      {
-        id: '__shell__',
-        type: 'new_shell',
-        title: 'New shell tab',
-        description: 'Open a plain shell tab in this vault workspace'
-      },
-      {
-        id: '__refresh__',
-        type: 'refresh',
-        title: 'Refresh Herdr status',
-        description: 'Query Herdr daemon for latest state'
-      }
-    );
+    this.items.push({
+      id: '__shell__',
+      type: 'new_shell',
+      title: 'New shell tab',
+      description: 'Open a plain shell tab in this vault workspace'
+    });
+
+    this.items.push({
+      id: '__settings__',
+      type: 'open_settings',
+      title: 'Configure Herdr',
+      description: 'Open the plugin settings'
+    });
   }
 
   getItems(): ActionItem[] {
@@ -70,7 +69,7 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
   }
 
   getItemText(item: ActionItem): string {
-    return `${item.title} ${item.description}`;
+    return `${item.title} — ${item.description}`;
   }
 
   onChooseItem(item: ActionItem, _evt: MouseEvent | KeyboardEvent): void {

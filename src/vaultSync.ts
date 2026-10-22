@@ -3,16 +3,22 @@ import { App, TFile, Notice, normalizePath, requestUrl } from 'obsidian';
 export interface RemoteFileInfo {
   path: string;
   mtime: number;
+  /** From a bridge that sends it: two writes within a second share an `mtime`, not this. */
+  mtime_ms?: number;
   size: number;
 }
 
+/** A synced file the bridge reports changed on the laptop: as it is now, or deleted. */
+export type RemoteChange = RemoteFileInfo | { path: string; deleted: true };
+
 /**
- * Each side's mtime at the last sync: the phone's (ms) and the laptop's (s). Each is only ever
- * compared with the same side's, so the two clocks never need to agree.
+ * Each side's mtime at the last sync: the phone's (ms) and the laptop's (s, and ms when the bridge
+ * sends it). Each is only ever compared with the same side's, so the two clocks never need to agree.
  */
 export interface SyncLedgerEntry {
   localMtime: number;
   remoteMtime: number;
+  remoteMtimeMs?: number;
 }
 
 export interface SyncLedger {
@@ -40,6 +46,11 @@ export function isSyncablePath(relPath: string): boolean {
   if (name.startsWith('.') || parts.some((p) => p.startsWith('.') || EXCLUDED_DIRS.includes(p))) return false;
   const dot = name.lastIndexOf('.');
   return dot > 0 && SYNCED_EXTENSIONS.includes(name.slice(dot + 1).toLowerCase());
+}
+
+/** Whether the laptop's file is as the ledger saw it: to the ms when both know it, else to the second. */
+function remoteUnchanged(prev: SyncLedgerEntry, remote: RemoteFileInfo): boolean {
+  return prev.remoteMtimeMs !== undefined && remote.mtime_ms !== undefined ? remote.mtime_ms === prev.remoteMtimeMs : remote.mtime === prev.remoteMtime;
 }
 
 function sameBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
@@ -93,23 +104,33 @@ export class VaultSync {
     return res;
   }
 
-  async sync(ledger: SyncLedger): Promise<{ result: SyncResult; updatedLedger: SyncLedger }> {
+  /**
+   * Syncs the whole vault against the bridge's manifest, or with `changes` (what the bridge pushed)
+   * just those files, which then needs no manifest.
+   */
+  async sync(ledger: SyncLedger, changes?: RemoteChange[]): Promise<{ result: SyncResult; updatedLedger: SyncLedger }> {
     const result: SyncResult = { pulled: 0, pushed: 0, conflicts: 0, deleted: 0, errors: [] };
     const updatedLedger: SyncLedger = { ...ledger };
 
     let remoteFiles: RemoteFileInfo[];
-    try {
-      remoteFiles = (await this.request('GET', 'manifest')).json as RemoteFileInfo[];
-    } catch (err) {
-      result.errors.push(`Manifest fetch failed: ${(err as Error).message}`);
-      return { result, updatedLedger };
+    if (changes) {
+      remoteFiles = changes.filter((c): c is RemoteFileInfo => !('deleted' in c));
+    } else {
+      try {
+        remoteFiles = (await this.request('GET', 'manifest')).json as RemoteFileInfo[];
+      } catch (err) {
+        result.errors.push(`Manifest fetch failed: ${(err as Error).message}`);
+        return { result, updatedLedger };
+      }
     }
 
     const remoteMap = new Map(remoteFiles.map((rf) => [rf.path, rf]));
     const localMap = new Map(
       this.app.vault.getFiles().filter((f) => isSyncablePath(f.path)).map((f) => [f.path, f])
     );
-    const queue = [...new Set([...remoteMap.keys(), ...localMap.keys(), ...Object.keys(ledger)])];
+    const queue = changes
+      ? [...new Set(changes.map((c) => c.path).filter(isSyncablePath))]
+      : [...new Set([...remoteMap.keys(), ...localMap.keys(), ...Object.keys(ledger)])];
 
     // A few files at a time: one request each, but not one round trip after another.
     await Promise.all(
@@ -136,8 +157,14 @@ export class VaultSync {
     const vault = this.app.vault;
     const prev = ledger[path];
     const localChanged = prev ? local?.stat.mtime !== prev.localMtime : !!local;
-    const remoteChanged = prev ? remote?.mtime !== prev.remoteMtime : !!remote;
-    if (!localChanged && !remoteChanged) return;
+    const remoteChanged = prev ? !remote || !remoteUnchanged(prev, remote) : !!remote;
+    if (!localChanged && !remoteChanged) {
+      // A ledger from before the bridge sent ms: from now on, compare to the ms.
+      if (prev && remote?.mtime_ms !== undefined && prev.remoteMtimeMs === undefined) {
+        ledger[path] = { ...prev, remoteMtimeMs: remote.mtime_ms };
+      }
+      return;
+    }
 
     if (local && remote && localChanged && remoteChanged) {
       const theirs = await this.download(path);
@@ -150,7 +177,7 @@ export class VaultSync {
         result.conflicts++;
         new Notice(`⚠️ Sync conflict on "${path}" — kept the laptop's version, and yours as a conflict copy.`);
       }
-      ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime };
+      ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime, remoteMtimeMs: remote.mtime_ms };
     } else if (remoteChanged && (remote || !localChanged)) {
       if (remote) {
         const data = await this.download(path);
@@ -165,7 +192,7 @@ export class VaultSync {
           }
           await vault.createBinary(path, data);
         }
-        ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime };
+        ledger[path] = { localMtime: await this.localMtime(path), remoteMtime: remote.mtime, remoteMtimeMs: remote.mtime_ms };
         result.pulled++;
       } else {
         // Into the user's trash (Obsidian's or the system's, per their setting), never gone for good.
@@ -176,7 +203,8 @@ export class VaultSync {
     } else if (local) {
       const localMtime = local.stat.mtime;
       const res = await this.request('POST', 'file', path, await vault.readBinary(local));
-      ledger[path] = { localMtime, remoteMtime: (res.json as { mtime: number }).mtime };
+      const { mtime, mtime_ms } = res.json as { mtime: number; mtime_ms?: number };
+      ledger[path] = { localMtime, remoteMtime: mtime, remoteMtimeMs: mtime_ms };
       result.pushed++;
     } else {
       if (remote) {

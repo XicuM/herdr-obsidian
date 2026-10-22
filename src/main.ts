@@ -1,9 +1,8 @@
-import { App, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
+import { App, Editor, MarkdownPreviewView, MarkdownView, Menu, TFile, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { TerminalStream, TerminalStreamCallbacks } from './terminalStream';
-import { VaultSync, SyncLedger } from './vaultSync';
+import { VaultSync, SyncLedger, RemoteChange, isSyncablePath } from './vaultSync';
 import { AgentResolver, Conversation } from './resolver';
-import { AgentAttender } from './notifier';
 import { HerdrSwitcherModal, HarnessPickerModal, ActionItem } from './switcherModal';
 import { HerdrTerminalView, HERDR_VIEW_TYPE } from './terminalView';
 import { RenameTabModal } from './renameModal';
@@ -14,7 +13,6 @@ export const HERDR_OBSIDIAN_SESSION = 'herdr-obsidian';
 const LOCAL_BRIDGE = '127.0.0.1:7788';
 
 export interface HerdrSettings {
-  focusOnBlocked: boolean;
   themeMode: 'auto' | 'dark' | 'light';
   fontSize: number;
   addAtPrefixOnDrop: boolean;
@@ -28,7 +26,6 @@ export interface HerdrSettings {
 }
 
 const DEFAULT_SETTINGS: HerdrSettings = {
-  focusOnBlocked: true,
   themeMode: 'auto', // Follow Obsidian theme
   fontSize: 14,
   addAtPrefixOnDrop: true,
@@ -41,7 +38,9 @@ const DEFAULT_SETTINGS: HerdrSettings = {
   agentSkillOffered: false
 };
 
-const AGENT_SKILL_PATH = '.claude/skills/herdr-open/SKILL.md';
+/** Where agents look for project skills; Claude Code only reads .claude/skills, so that one links here. */
+const AGENT_SKILL_DIR = '.agents/skills/herdr-open';
+const CLAUDE_SKILL_LINK = '.claude/skills/herdr-open';
 const AGENT_SKILL = `---
 name: herdr-open
 description: Show a note, heading or line to the user in their Obsidian window, or suggest edits to their notes. Use when pointing at a note instead of pasting it, or when proposing changes to text.
@@ -58,14 +57,17 @@ export default class HerdrPlugin extends Plugin {
   settings: HerdrSettings = DEFAULT_SETTINGS;
   private client!: HerdrClient;
   private resolver!: AgentResolver;
-  private attender!: AgentAttender;
   private statusBarEl!: HTMLElement;
-  private syncRibbonEl?: HTMLElement;
   private unsubscribeEvents: (() => void) | null = null;
   /** Bumped on each disconnect, so a subscription that resolves afterwards knows it is stale. */
   private connection = 0;
   private refreshRunning: Promise<void> = Promise.resolve();
   private refreshQueued: Promise<void> | null = null;
+  private syncRunning: Promise<void> = Promise.resolve();
+  private syncQueued: { done: Promise<void>; manual: boolean; changes: Map<string, RemoteChange> | null } | null = null;
+  /** Files edited on the phone since the last check, pushed once the edits settle. */
+  private localEdits = new Set<string>();
+  private localEditsTimer = 0;
   /** The conversations last rendered, to skip re-rendering when a snapshot changed nothing shown. */
   private renderedKey = '';
   private convByTab = new Map<string, Conversation>();
@@ -97,9 +99,6 @@ export default class HerdrPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    // Shares the settings object, so it sees focusOnBlocked change.
-    this.attender = new AgentAttender(this.settings);
-    this.attender.setOnFocus((conv) => void this.activateConversation(conv));
 
     // Register Terminal View in Obsidian UI
     this.registerView(
@@ -112,7 +111,7 @@ export default class HerdrPlugin extends Plugin {
     this.statusBarEl.addClass('herdr-status-bar');
     this.statusBarEl.addEventListener('click', () => {
       if (!this.client.isConfigured()) {
-        new Notice('Set the herdr-bridge token in the plugin settings.');
+        this.openSettings();
         return;
       }
       const blocked = this.getConversations().find((c) => c.status === 'blocked');
@@ -123,7 +122,7 @@ export default class HerdrPlugin extends Plugin {
       this.pickConversation('switch');
     });
 
-    this.addRibbonIcon('terminal', 'Open agent terminal', () => void this.activateTerminalView());
+    this.addRibbonIcon('bot', 'Open agent terminal', () => void this.activateTerminalView());
 
     // Commands
     this.addCommand({
@@ -210,7 +209,6 @@ export default class HerdrPlugin extends Plugin {
         return true;
       }
     });
-    this.syncRibbonEl = this.addRibbonIcon('refresh-cw', 'Sync vault with laptop', () => void this.syncVault(true));
 
     this.addCommand({
       id: 'install-agent-skill',
@@ -231,16 +229,46 @@ export default class HerdrPlugin extends Plugin {
             return;
           }
           const change = changeAt(editor.getValue(), editor.posToOffset(editor.getCursor()));
-          if (!change) new Notice('No suggestion at the cursor.');
+          if (!change) new Notice('No suggestion here.');
           else editor.replaceRange(change.replacement(accept), editor.offsetToPos(change.from), editor.offsetToPos(change.to));
         }
       });
     }
 
+    // Point the active agent tab at the selected lines, so it knows where the text lives.
+    this.addCommand({
+      id: 'send-selection',
+      name: 'Send selection to agent',
+      checkCallback: (checking) => {
+        const active = this.app.workspace.activeEditor;
+        const ref = this.readingSelectionRef() || (active?.editor && active.file ? editorRef(active.editor, active.file) : null);
+        if (!ref) return false;
+        if (!checking) this.sendReference(ref);
+        return true;
+      }
+    });
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, info) => {
+      const ref = info.file ? editorRef(editor, info.file) : null;
+      if (ref) this.addSendItem(menu, ref);
+    }));
+    // Reading view leaves selections to Electron's native Copy menu; replace it with ours.
+    this.registerDomEvent(document, 'contextmenu', (e) => {
+      const ref = this.readingSelectionRef();
+      if (!ref || e.defaultPrevented) return;
+      e.preventDefault();
+      const text = window.getSelection()?.toString() ?? '';
+      const menu = new Menu().addItem((item) => item
+        .setTitle('Copy')
+        .setIcon('lucide-copy')
+        .setSection('clipboard')
+        .onClick(() => void navigator.clipboard.writeText(text)));
+      this.addSendItem(menu, ref);
+      menu.showAtMouseEvent(e);
+    });
+
     this.addSettingTab(new HerdrSettingTab(this.app, this));
 
     this.connect();
-    this.app.workspace.onLayoutReady(() => this.offerAgentSkill());
 
     if (Platform.isMobile) {
       // In the background a phone streams nothing; it reconnects on return.
@@ -256,9 +284,17 @@ export default class HerdrPlugin extends Plugin {
       });
     }
 
-    if (this.settings.autoSyncOnOpen && this.isRemoteBridge()) {
-      this.app.workspace.onLayoutReady(() => void this.syncVault(false));
-    }
+    // Registered once the vault is loaded: loading it raises a `create` for every file.
+    this.app.workspace.onLayoutReady(() => {
+      this.registerEvent(this.app.vault.on('create', (f) => this.localEdited(f.path)));
+      this.registerEvent(this.app.vault.on('modify', (f) => this.localEdited(f.path)));
+      this.registerEvent(this.app.vault.on('delete', (f) => this.localEdited(f.path)));
+      this.registerEvent(this.app.vault.on('rename', (f, oldPath) => {
+        this.localEdited(oldPath);
+        this.localEdited(f.path);
+      }));
+    });
+    this.register(() => window.clearTimeout(this.localEditsTimer));
   }
 
   onunload() {
@@ -270,7 +306,6 @@ export default class HerdrPlugin extends Plugin {
     this.disconnect();
     this.client = new HerdrClient({ host: this.bridgeHost(), token: this.settings.bridgeToken, session: HERDR_OBSIDIAN_SESSION });
     this.resolver = new AgentResolver(this.client);
-    this.syncRibbonEl?.toggle(this.isRemoteBridge());
     // The bridge pushes every new snapshot, so nothing polls.
     this.subscribeEvents();
     void this.refreshState();
@@ -364,6 +399,46 @@ export default class HerdrPlugin extends Plugin {
     }
   }
 
+  private addSendItem(menu: Menu, ref: LineRef) {
+    menu.addItem((item) => item
+      .setTitle('Send to agent')
+      .setIcon('terminal')
+      .setSection('clipboard')
+      .onClick(() => this.sendReference(ref)));
+  }
+
+  private sendReference(ref: LineRef) {
+    const view = this.getTerminalView();
+    if (view) view.sendReference(ref.path, ref.start, ref.end);
+    else new Notice('Open the herdr terminal view first.');
+  }
+
+  /** The source lines behind a Reading view selection, via the blocks it spans. */
+  private readingSelectionRef(): LineRef | null {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) return null;
+    const range = sel.getRangeAt(0);
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view as MarkdownView;
+      if (view.getMode() !== 'preview' || !view.file || !view.previewMode.containerEl.contains(range.startContainer)) continue;
+      // Obsidian internals: the renderer maps a rendered block back to its source lines.
+      const renderer = (view.previewMode as MarkdownPreviewView & {
+        renderer?: { getSectionInfo(el: HTMLElement): { lineStart: number; lineEnd: number } | null };
+      }).renderer;
+      const section = (node: Node) => {
+        for (let el = node.instanceOf(HTMLElement) ? node : node.parentElement; el; el = el.parentElement) {
+          const info = renderer?.getSectionInfo(el);
+          if (info) return info;
+        }
+        return null;
+      };
+      const first = section(range.startContainer);
+      const last = section(range.endContainer);
+      return first && last ? { path: view.file.path, start: first.lineStart + 1, end: last.lineEnd + 1 } : null;
+    }
+    return null;
+  }
+
   public getTerminalView(): HerdrTerminalView | null {
     const leaves = this.app.workspace.getLeavesOfType(HERDR_VIEW_TYPE);
     if (leaves.length > 0 && leaves[0].view instanceof HerdrTerminalView) {
@@ -385,23 +460,33 @@ export default class HerdrPlugin extends Plugin {
     await this.app.workspace.openLinkText(target, '', false, line === undefined ? undefined : { eState: { line } });
   }
 
-  /** Writes the agent skill into the vault. Needs herdr-bridge on this machine: a phone's vault syncs without dotfolders. */
+  /** Writes the agent skill into the vault. Desktop only: it symlinks, and a phone's vault syncs without dotfolders. */
   public async installAgentSkill() {
     const adapter = this.app.vault.adapter;
-    await adapter.mkdir(normalizePath(AGENT_SKILL_PATH.replace(/\/[^/]+$/, '')));
-    await adapter.write(normalizePath(AGENT_SKILL_PATH), AGENT_SKILL);
+    if (!(adapter instanceof FileSystemAdapter)) return;
+    await adapter.mkdir(AGENT_SKILL_DIR);
+    await adapter.write(`${AGENT_SKILL_DIR}/SKILL.md`, AGENT_SKILL);
+    // Loaded here, not imported: the mobile app has no fs.
+    if (Platform.isDesktop) {
+      const fs = (await import('fs')).promises;
+      const link = `${adapter.getBasePath()}/${CLAUDE_SKILL_LINK}`;
+      await fs.mkdir(link.replace(/\/[^/]+$/, ''), { recursive: true });
+      await fs.rm(link, { recursive: true, force: true });
+      await fs.symlink(`../../${AGENT_SKILL_DIR}`, link, 'dir');
+    }
     new Notice('Herdr: agent skill installed. Agents can now open notes here.');
   }
 
-  /** Once per vault, asks before writing into it. */
-  private offerAgentSkill() {
-    if (this.settings.agentSkillOffered || this.isRemoteBridge() || !this.settings.allowAgentOpen) return;
+  /** Once per vault, the terminal view asks in a tab of its own before writing into the vault. */
+  public wantsSkillOffer(): boolean {
+    return !this.settings.agentSkillOffered && this.settings.allowAgentOpen && !this.isRemoteBridge();
+  }
+
+  public async answerSkillOffer(install: boolean) {
     this.settings.agentSkillOffered = true;
-    void this.saveSettings();
-    const frag = createFragment();
-    frag.createSpan({ text: 'Herdr: let agents open notes in Obsidian? ' });
-    frag.createEl('button', { text: 'Install skill' }).addEventListener('click', () => void this.installAgentSkill());
-    new Notice(frag, 15000);
+    await this.saveSettings();
+    if (install) await this.installAgentSkill();
+    this.getTerminalView()?.renderTabs();
   }
 
   private subscribeEvents() {
@@ -412,6 +497,14 @@ export default class HerdrPlugin extends Plugin {
         if (evt.type === 'snapshot') void this.applySnapshot(evt.data.snapshot || evt.data);
         else if (evt.type === 'error') this.updateStatusBar([], false);
         else if (evt.type === 'open' && (!evt.vault || evt.vault === this.app.vault.getName())) void this.openForAgent(evt.path, evt.heading, evt.line);
+        // Live vault sync: the whole vault on each (re)connect, to catch up on what the bridge pushed
+        // while there was no connection, then each change it pushes. Only once the vault is loaded:
+        // before, every file would look deleted on the phone.
+        else if (evt.type === 'connected' && this.settings.autoSyncOnOpen) {
+          this.app.workspace.onLayoutReady(() => void this.syncVault(false));
+        } else if (evt.type === 'vault_changed' && evt.vault === this.app.vault.getName() && this.settings.autoSyncOnOpen) {
+          this.app.workspace.onLayoutReady(() => void this.syncVault(false, evt.files));
+        }
       })
       .then((unsub) => {
         if (connection !== this.connection) unsub();
@@ -464,7 +557,6 @@ export default class HerdrPlugin extends Plugin {
     if (snapshot.focused_tab_id && this.convByTab.has(snapshot.focused_tab_id)) {
       this.currentActiveTabId = snapshot.focused_tab_id;
     }
-    this.attender.setConversations(convs);
 
     // Re-rendering unchanged tabs would cost battery, and break a drag or double-click in progress.
     const key = JSON.stringify(convs);
@@ -472,10 +564,6 @@ export default class HerdrPlugin extends Plugin {
       this.renderedKey = key;
       this.updateStatusBar(convs, true);
       this.getTerminalView()?.renderTabs();
-    }
-
-    for (const c of convs) {
-      this.attender.handleStatusChange(c.pane_id, c.status);
     }
   }
 
@@ -533,13 +621,21 @@ export default class HerdrPlugin extends Plugin {
           void this.closeConversationTab(item.conv);
         } else if (item.type === 'new_shell') {
           void this.newShellTab();
-        } else if (item.type === 'refresh') {
-          void this.refreshState();
+        } else if (item.type === 'open_settings') {
+          this.openSettings();
         }
       },
       mode
     );
     modal.open();
+  }
+
+  /** Open the plugin's own page in Obsidian's settings dialog. */
+  public openSettings() {
+    // App.setting is undocumented but stable since v1.0; the typings omit it.
+    const setting = (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting;
+    setting.open();
+    setting.openTabById(this.manifest.id);
   }
 
   public async activateConversation(conv: Conversation) {
@@ -650,7 +746,48 @@ export default class HerdrPlugin extends Plugin {
     }
   }
 
-  public async syncVault(manual = false): Promise<void> {
+  /**
+   * Syncs the whole vault, or with `changes` (what the bridge pushed) just those files. One sync at a
+   * time, since two would race over the same files and ledger; calls made meanwhile share a single
+   * follow-up, so none misses a change, and a whole-vault one covers every pushed file.
+   */
+  public syncVault(manual = false, changes?: RemoteChange[]): Promise<void> {
+    let queued = this.syncQueued;
+    if (!queued) {
+      const next = { manual: false, changes: changes ? new Map<string, RemoteChange>() : null } as NonNullable<typeof this.syncQueued>;
+      next.done = this.syncRunning.then(() => {
+        this.syncQueued = null;
+        return (this.syncRunning = this.runSync(next.manual, next.changes ? [...next.changes.values()] : undefined));
+      });
+      queued = this.syncQueued = next;
+    }
+    queued.manual ||= manual;
+    if (!changes) queued.changes = null;
+    else for (const c of changes) queued.changes?.set(c.path, c);
+    return queued.done;
+  }
+
+  /**
+   * Pushes phone edits a few seconds after the last one: Obsidian saves a note every couple of
+   * seconds while typing. A whole-vault sync, so a laptop edit to the same file is still caught.
+   */
+  private localEdited(path: string) {
+    if (!isSyncablePath(path) || !this.isRemoteBridge() || !this.settings.autoSyncOnOpen) return;
+    this.localEdits.add(path);
+    window.clearTimeout(this.localEditsTimer);
+    this.localEditsTimer = window.setTimeout(() => {
+      const ledger = this.settings.syncLedger || {};
+      // A sync's own writes match its ledger: only a real edit needs a sync.
+      const edited = [...this.localEdits].some((p) => {
+        const file = this.app.vault.getFileByPath(p);
+        return file ? file.stat.mtime !== ledger[p]?.localMtime : p in ledger;
+      });
+      this.localEdits.clear();
+      if (edited) void this.syncVault(false);
+    }, 3000);
+  }
+
+  private async runSync(manual: boolean, changes?: RemoteChange[]): Promise<void> {
     if (!this.isRemoteBridge()) return;
     if (!this.settings.bridgeToken) {
       if (manual) new Notice('Set the herdr-bridge token in the plugin settings to sync.');
@@ -663,13 +800,14 @@ export default class HerdrPlugin extends Plugin {
 
     try {
       const syncer = new VaultSync(this.app, this.bridgeHost(), this.settings.bridgeToken, HERDR_OBSIDIAN_SESSION);
-      const { result, updatedLedger } = await syncer.sync(this.settings.syncLedger || {});
+      const { result, updatedLedger } = await syncer.sync(this.settings.syncLedger || {}, changes);
       this.settings.syncLedger = updatedLedger;
       await this.saveSettings();
 
       if (result.errors.length > 0) {
         new Notice(`Sync completed with errors: ${result.errors[0]}`);
-      } else if (manual || result.pulled > 0 || result.pushed > 0 || result.conflicts > 0) {
+      } else if (manual) {
+        // Automatic syncs run on every edit, so they say nothing (a conflict has its own notice).
         new Notice(
           `Vault synced: ${result.pulled} pulled, ${result.pushed} pushed${
             result.conflicts ? `, ${result.conflicts} conflicts` : ''
@@ -772,16 +910,6 @@ class HerdrSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName('Focus on blocked')
-      .setDesc('When an agent starts waiting for input, open the terminal view and show a notice. Off: silent, no focus stealing.')
-      .addToggle((toggle) =>
-        toggle.setValue(settings.focusOnBlocked).onChange(async (val) => {
-          settings.focusOnBlocked = val;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
       .setName('Theme mode')
       .setDesc("Follow Obsidian's theme, or force dark or light terminal colors.")
       .addDropdown((drop) =>
@@ -865,8 +993,8 @@ class HerdrSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Vault sync').setHeading();
 
     new Setting(containerEl)
-      .setName('Sync on open')
-      .setDesc("Sync with the laptop's vault of the same name when Obsidian opens.")
+      .setName('Sync automatically')
+      .setDesc("Sync with the laptop's vault of the same name when Obsidian opens or comes back to the foreground.")
       .addToggle((toggle) =>
         toggle.setValue(settings.autoSyncOnOpen).onChange(async (val) => {
           settings.autoSyncOnOpen = val;
@@ -884,4 +1012,19 @@ class HerdrSettingTab extends PluginSettingTab {
           .onClick(() => void this.plugin.syncVault(true))
       );
   }
+}
+
+interface LineRef {
+  path: string;
+  start: number;
+  end: number;
+}
+
+/** The lines an editor selection covers; a selection ending at a line's start doesn't take that line. */
+function editorRef(editor: Editor, file: TFile): LineRef | null {
+  if (!editor.somethingSelected()) return null;
+  const from = editor.getCursor('from');
+  const to = editor.getCursor('to');
+  const end = to.ch === 0 && to.line > from.line ? to.line - 1 : to.line;
+  return { path: file.path, start: from.line + 1, end: end + 1 };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { requestUrl, TFile } from 'obsidian';
-import { VaultSync, SyncLedger, isSyncablePath } from '../src/vaultSync';
+import { VaultSync, SyncLedger, RemoteChange, isSyncablePath } from '../src/vaultSync';
 
 const enc = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
 const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
@@ -9,7 +9,10 @@ const dec = (b: ArrayBuffer) => new TextDecoder().decode(b);
 // in ms and hours off. Sync must never compare one with the other.
 let laptopNow: number; // s
 let phoneNow: number; // ms
-let remote: Map<string, { mtime: number; data: ArrayBuffer }>;
+let remote: Map<string, { mtime: number; mtimeMs: number; data: ArrayBuffer }>;
+/** Whether the bridge sends `mtime_ms`, as one with live sync does. */
+let msBridge: boolean;
+let laptopMs: number; // the ms within laptopNow's second, moving on with each write
 let local: Map<string, { file: TFile; data: ArrayBuffer }>;
 let requests: { method: string; url: URL; headers: any }[];
 let failPaths: Set<string>;
@@ -43,7 +46,12 @@ const app = {
 } as any;
 
 const putLocal = (p: string, text: string) => local.set(p, { file: new TFile(p, phoneNow), data: enc(text) });
-const putRemote = (p: string, text: string) => remote.set(p, { mtime: laptopNow, data: enc(text) });
+const putRemote = (p: string, text: string) => remote.set(p, { mtime: laptopNow, mtimeMs: laptopNow * 1000 + ++laptopMs, data: enc(text) });
+/** The file as the bridge lists it. */
+const remoteInfo = (p: string) => {
+  const r = remote.get(p)!;
+  return { path: p, mtime: r.mtime, size: r.data.byteLength, ...(msBridge ? { mtime_ms: r.mtimeMs } : {}) };
+};
 const localText = (p: string) => (local.has(p) ? dec(local.get(p)!.data) : undefined);
 const remoteText = (p: string) => (remote.has(p) ? dec(remote.get(p)!.data) : undefined);
 const tick = () => {
@@ -53,6 +61,8 @@ const tick = () => {
 
 beforeEach(() => {
   laptopNow = 1_000_000;
+  laptopMs = 0;
+  msBridge = false;
   phoneNow = 5_000_000_000_000;
   remote = new Map();
   local = new Map();
@@ -65,20 +75,21 @@ beforeEach(() => {
     const p = u.searchParams.get('path')!;
     if (failPaths.has(p)) return { status: 500, text: 'boom' };
     if (u.pathname.endsWith('/manifest')) {
-      return { status: 200, json: [...remote].map(([path, r]) => ({ path, mtime: r.mtime, size: r.data.byteLength })) };
+      return { status: 200, json: [...remote.keys()].map(remoteInfo) };
     }
     if (method === 'GET') return remote.has(p) ? { status: 200, arrayBuffer: remote.get(p)!.data } : { status: 404, text: 'nope' };
     if (method === 'POST') {
       // Like the bridge: the file gets the laptop's clock, which the response reports.
-      remote.set(p, { mtime: laptopNow, data: body });
-      return { status: 200, json: { mtime: laptopNow } };
+      remote.set(p, { mtime: laptopNow, mtimeMs: laptopNow * 1000 + ++laptopMs, data: body });
+      const { mtime, mtime_ms } = remoteInfo(p);
+      return { status: 200, json: { mtime, mtime_ms } };
     }
     if (method === 'DELETE') return remote.delete(p) ? { status: 200 } : { status: 404, text: 'nope' };
   }) as any);
 });
 
-const sync = async (ledger: SyncLedger = {}) => {
-  const out = await new VaultSync(app, 'laptop.ts.net:7788/', ' tok ').sync(ledger);
+const sync = async (ledger: SyncLedger = {}, changes?: RemoteChange[]) => {
+  const out = await new VaultSync(app, 'laptop.ts.net:7788/', ' tok ').sync(ledger, changes);
   tick();
   return out;
 };
@@ -279,5 +290,80 @@ describe('VaultSync incremental sync', () => {
     }) as any);
     expect((await sync(ledger)).result.pulled).toBe(10);
     expect(peak).toBe(4);
+  });
+});
+
+describe('VaultSync with a bridge that sends ms', () => {
+  /** Syncs without moving the clocks on, as two syncs within a second do. */
+  const syncNow = (ledger: SyncLedger) => new VaultSync(app, 'laptop', 'tok').sync(ledger);
+
+  it('pulls a second laptop edit made within the same second, which an old bridge misses', async () => {
+    for (const ms of [false, true]) {
+      msBridge = ms;
+      remote.clear();
+      local.clear();
+      putRemote('a.md', 'v1');
+      const { updatedLedger } = await syncNow({});
+      putRemote('a.md', 'v2');
+      const { result } = await syncNow(updatedLedger);
+      expect([ms, result.pulled, localText('a.md')]).toEqual(ms ? [true, 1, 'v2'] : [false, 0, 'v1']);
+    }
+  });
+
+  it('takes over a ledger from before ms without transferring anything', async () => {
+    putLocal('a.md', 'v1');
+    putRemote('a.md', 'v1');
+    const ledger = await synced();
+    expect(ledger['a.md'].remoteMtimeMs).toBeUndefined();
+    msBridge = true;
+    requests = [];
+    const { result, updatedLedger } = await sync(ledger);
+    expect(result).toMatchObject({ pulled: 0, pushed: 0, conflicts: 0, deleted: 0 });
+    expect(requests.map((r) => r.method)).toEqual(['GET']); // the manifest only
+    expect(updatedLedger['a.md']).toEqual({ ...ledger['a.md'], remoteMtimeMs: remote.get('a.md')!.mtimeMs });
+  });
+
+  describe('changes the bridge pushed', () => {
+    let ledger: SyncLedger;
+    beforeEach(async () => {
+      msBridge = true;
+      for (const p of ['a.md', 'b.md']) {
+        putLocal(p, 'v1');
+        putRemote(p, 'v1');
+      }
+      ledger = await synced();
+      requests = [];
+    });
+
+    it('applies just those files, without fetching the manifest', async () => {
+      putRemote('a.md', 'v2');
+      remote.delete('b.md');
+      putRemote('.obsidian/workspace.json', '{}');
+      const changes = [remoteInfo('a.md'), { path: 'b.md', deleted: true as const }, remoteInfo('.obsidian/workspace.json')];
+      const { result } = await sync(ledger, changes);
+      expect(result).toMatchObject({ pulled: 1, deleted: 1, errors: [] });
+      expect(requests.map((r) => `${r.method} ${r.url.searchParams.get('path')}`)).toEqual(['GET a.md']);
+      expect(localText('a.md')).toBe('v2');
+      expect(local.has('b.md')).toBe(false);
+      expect(local.has('.obsidian/workspace.json')).toBe(false);
+    });
+
+    it("ignores the echo of the phone's own upload", async () => {
+      putLocal('a.md', 'phone edit');
+      const { updatedLedger } = await sync(ledger);
+      requests = [];
+      const { result } = await sync(updatedLedger, [remoteInfo('a.md')]);
+      expect(result).toMatchObject({ pulled: 0, pushed: 0, conflicts: 0 });
+      expect(requests).toEqual([]);
+    });
+
+    it('keeps a phone edit that crossed a pushed laptop edit, as a conflict copy', async () => {
+      putRemote('a.md', 'laptop');
+      putLocal('a.md', 'phone');
+      const { result } = await sync(ledger, [remoteInfo('a.md')]);
+      expect(result.conflicts).toBe(1);
+      expect(localText('a.md')).toBe('laptop');
+      expect(localText([...local.keys()].find((k) => k.includes('.conflict-phone-'))!)).toBe('phone');
+    });
   });
 });

@@ -46,7 +46,7 @@ The plugin does nothing on its own: it needs [herdr](https://herdr.dev) and herd
 
 ### What it writes in your vault
 
-Only if you accept the one-time offer (or run **Install agent skill**), the plugin writes `.claude/skills/herdr-open/SKILL.md`, a short note telling agents how to ask Obsidian to open a note. It is written with Obsidian's adapter API because Obsidian's vault API doesn't see hidden folders. Vault sync, with a bridge on another machine, creates and updates notes in the vault.
+Only if you approve the one-time offer (or run **Install agent skill**) is `.agents/skills/herdr-open/SKILL.md` written, with `.claude/skills/herdr-open` linked to it for Claude Code: a short note telling agents how to ask Obsidian to open a note. The command writes it with Obsidian's adapter API because Obsidian's vault API doesn't see hidden folders. Vault sync, with a bridge on another machine, creates and updates notes in the vault.
 
 ## Features
 
@@ -100,11 +100,11 @@ Dragging selected text inserts it directly, and multiline text is wrapped in bra
 
 ### Agents open notes in Obsidian
 
-The bridge can push `{"type":"open","vault":"Notes","path":"Note.md","heading":"Intro","line":7}` on `/ws/session`; the plugin then opens that note in Obsidian. Only existing files inside the vault open, and **Let agents open notes** turns it off. On first start with a local bridge, the plugin offers to write `.claude/skills/herdr-open/SKILL.md` (also **Install agent skill**), which tells agents to run `herdr-bridge obsidian open <path>[#heading] [--line N]`. It needs a herdr-bridge with `obsidian open` (see its [PROTOCOL.md](https://github.com/XicuM/herdr-bridge/blob/main/PROTOCOL.md)); the event carries the vault's name, and other vaults ignore it.
+The bridge can push `{"type":"open","vault":"Notes","path":"Note.md","heading":"Intro","line":7}` on `/ws/session`; the plugin then opens that note in Obsidian. Only existing files inside the vault open, and **Let agents open notes** turns it off. On first start with a local bridge, an **Agent skill** tab in the terminal view asks to write `.agents/skills/herdr-open/SKILL.md`, linked from `.claude/skills/herdr-open` (or run **Install agent skill**), which tells agents to run `herdr-bridge obsidian open <path>[#heading] [--line N]`. It needs a herdr-bridge with `obsidian open` (see its [PROTOCOL.md](https://github.com/XicuM/herdr-bridge/blob/main/PROTOCOL.md)); the event carries the vault's name, and other vaults ignore it.
 
 ### Vault sync (with a bridge on another machine)
 
-With herdr-bridge on another machine, e.g. your laptop seen from your phone, the plugin syncs this vault with that machine's Obsidian vault of the same name (looked up in Obsidian's vault list there, so any number of vaults work with no setup). Sync from the ribbon icon, the **Sync vault with laptop** command, or automatically on open.
+With herdr-bridge on another machine, e.g. your laptop seen from your phone, the plugin syncs this vault with that machine's Obsidian vault of the same name (looked up in Obsidian's vault list there, so any number of vaults work with no setup). Sync is live while Obsidian is open: a note an agent edits on the laptop arrives on the phone about a second later, and your own edits go to the laptop a few seconds after you stop typing. Whatever changed while Obsidian was closed or in the background is caught up when it connects again. The **Sync vault with laptop** command syncs on demand. Live updates from the laptop need herdr-bridge with vault watching; with an older bridge the plugin syncs when it connects and after your edits.
 
 - Each file changed on one side is copied to the other, deletions included (deleted files go to your trash).
 - When both sides changed a file, the edit always survives: the laptop's version keeps the path and yours is kept as `<name>.conflict-phone-<time>.<ext>`.
@@ -157,14 +157,13 @@ The embedded view takes over a pane while it is attached; other herdr clients st
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| Focus on blocked | On | Open the terminal view and show a notice when an agent transitions into `blocked`. |
 | Theme mode | Follow Obsidian | Follow Obsidian, or force the terminal's dark/light palette. |
 | Font size | 14 px | Terminal font size. Range 8–32 px. |
 | Prefix dropped files with @ | On | Use each harness's mention syntax for dropped paths. Off inserts a plain quoted path. |
 | Let agents open notes | On | Open notes when an agent asks through herdr-bridge. |
 | Bridge host | `127.0.0.1:7788` | `host:port` of herdr-bridge. On a phone, the laptop's address (e.g. its Tailscale IP). |
 | Bridge token | — | From `herdr-bridge --print-token`. |
-| Sync on open | On | Sync the vault when Obsidian opens (only with a bridge on another machine). |
+| Sync automatically | On | Keep the vault in sync live: on connecting, on each change on the laptop, and after your edits (only with a bridge on another machine). |
 
 ## How it works
 
@@ -197,8 +196,7 @@ npm run lint   # eslint with Obsidian's review rules (eslint-plugin-obsidianmd)
 | `src/terminalView.ts` | xterm.js view, tab bar, input, links, drag-and-drop. |
 | `src/terminalTheme.ts` | Obsidian CSS-variable palette and fallbacks. |
 | `src/resolver.ts` | Vault workspace and tab mapping, status sorting. |
-| `src/notifier.ts` | Transition-only blocked notifications. |
-| `src/vaultSync.ts` | On-demand two-way vault sync with the bridge's machine. |
+| `src/vaultSync.ts` | Two-way vault sync with the bridge's machine: the whole vault, or the files the bridge pushed. |
 | `src/switcherModal.ts`, `src/renameModal.ts` | Fuzzy switcher and rename dialog. |
 | `styles.css` | Native-style tab bar, status dots, full-bleed layout. |
 

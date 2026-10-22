@@ -1,4 +1,5 @@
 import { requestUrl } from 'obsidian';
+import type { RemoteChange } from './vaultSync';
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
@@ -72,6 +73,9 @@ export interface Snapshot {
 
 /** What herdr-bridge pushes on `/ws/session`: each new snapshot (wrapped in herdr's reply), why there is none, or an agent asking to show a note. */
 export type BridgeEvent =
+  /** Not from the bridge: the connection (re)opened, so pushes sent while it was down were missed. */
+  | { type: 'connected' }
+  | { type: 'vault_changed'; vault: string; files: RemoteChange[] }
   | { type: 'snapshot'; data: Snapshot & { snapshot?: Snapshot } }
   | { type: 'error'; error: string }
   | { type: 'open'; vault?: string; path: string; heading?: string; line?: number };
@@ -229,6 +233,7 @@ export class HerdrClient {
         ws = new WebSocket(wsUrl);
         ws.onopen = () => {
           delay = 1000;
+          if (!closed) cb({ type: 'connected' });
         };
         ws.onmessage = (event) => {
           if (closed) return;

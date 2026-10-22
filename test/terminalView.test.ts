@@ -105,6 +105,20 @@ describe('handleDrop', () => {
     view.handleDrop(drop({ text: 'hello' }));
     expect(view.stream.sendInput).toHaveBeenCalledWith('hello');
   });
+
+  it.each([
+    ['claude', 'n.md', 3, 5, '@n.md#L3-5 '],
+    ['claude', 'my n.md', 3, 3, '@"my n.md#L3" '],
+    ['opencode', 'n.md', 3, 5, '@n.md#L3-5 '],
+    ['copilot', 'n.md', 3, 5, '@n.md:3-5 '],
+    ['codex', 'my n.md', 3, 5, '"my n.md":3-5 '],
+    ['pi', 'my n.md', 3, 5, '@"my n.md":3-5 ']
+  ])('references a %s selection in its own syntax', (agent, path, start, end, expected) => {
+    plugin.getConversations = () => [{ tab_id: 't1', agent }];
+    view.stream = { isRunning: true, sendInput: vi.fn() };
+    view.sendReference(path, start, end);
+    expect(view.stream.sendInput).toHaveBeenCalledWith(expected);
+  });
 });
 
 describe('paletteIndexToHex', () => {
