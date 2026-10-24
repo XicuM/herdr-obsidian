@@ -1,6 +1,6 @@
 {
   "name": "herdr-obsidian",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Herdr AI coding agents inside Obsidian: embedded terminal tabs, live status, and file drag-and-drop.",
   "main": "main.js",
   "scripts": {
