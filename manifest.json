@@ -2,7 +2,7 @@
   "id": "herdr",
   "name": "Herdr",
   "version": "0.3.0",
-  "minAppVersion": "1.7.2",
+  "minAppVersion": "1.13.0",
   "description": "Run and watch herdr AI coding agents from a terminal view, on desktop and mobile, and sync this vault with your laptop.",
   "author": "XicuM",
   "authorUrl": "https://github.com/XicuM",

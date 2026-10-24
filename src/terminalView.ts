@@ -44,6 +44,7 @@ export class HerdrTerminalView extends ItemView {
   private terminalContainerEl!: HTMLElement;
   private skillOfferEl!: HTMLElement;
   private resizeObserver!: ResizeObserver;
+  private statusBarObserved = false;
   private themeObserver!: MutationObserver;
   private wheelAccumulator = 0;
   private dragCounter = 0;
@@ -74,6 +75,8 @@ export class HerdrTerminalView extends ItemView {
   }
 
   async onOpen() {
+    this.containerEl?.addClass('is-herdr-leaf');
+    this.containerEl?.closest('.workspace-leaf')?.classList.add('is-herdr-leaf');
     const container = this.contentEl;
     container.empty();
     container.addClass('herdr-view-container');
@@ -163,6 +166,15 @@ export class HerdrTerminalView extends ItemView {
     });
     this.resizeObserver.observe(this.terminalContainerEl);
 
+    if (typeof this.registerEvent === 'function' && this.plugin?.app?.workspace?.on) {
+      this.registerEvent(this.plugin.app.workspace.on('resize', () => {
+        this.handleResize();
+      }));
+      this.registerEvent(this.plugin.app.workspace.on('layout-change', () => {
+        this.handleResize();
+      }));
+    }
+
     // Watch Obsidian theme changes (light/dark toggle + CSS variable updates)
     this.themeObserver = new MutationObserver(() => {
       this.applyTheme();
@@ -184,6 +196,8 @@ export class HerdrTerminalView extends ItemView {
   }
 
   async onClose() {
+    this.containerEl?.removeClass('is-herdr-leaf');
+    this.containerEl?.closest('.workspace-leaf')?.classList.remove('is-herdr-leaf');
     if (this.onDragEnter) {
       this.terminalContainerEl.removeEventListener('dragenter', this.onDragEnter);
       this.terminalContainerEl.removeEventListener('dragover', this.onDragOver);
@@ -192,6 +206,7 @@ export class HerdrTerminalView extends ItemView {
     }
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
+      this.statusBarObserved = false;
     }
     if (this.themeObserver) {
       this.themeObserver.disconnect();
@@ -421,6 +436,12 @@ export class HerdrTerminalView extends ItemView {
 
     this.terminal.open(this.terminalContainerEl);
 
+    this.terminalContainerEl.addEventListener('click', (e) => {
+      if (e.target === this.terminalContainerEl) {
+        this.terminal?.focus();
+      }
+    });
+
     this.terminal.attachCustomWheelEventHandler((event: WheelEvent) => {
       if (!this.stream?.isRunning) return true;
 
@@ -520,19 +541,72 @@ export class HerdrTerminalView extends ItemView {
     }, 50);
   }
 
+  private getStatusBarOverlap(): number {
+    if (Platform.isMobile) return 0;
+    const statusBar = document.querySelector('.status-bar');
+    if (!statusBar) return 0;
+    const sbRect = statusBar.getBoundingClientRect();
+    if (sbRect.height === 0 || sbRect.width === 0) return 0;
+
+    const termRect = this.terminalContainerEl?.getBoundingClientRect();
+    if (!termRect || termRect.height === 0 || termRect.width === 0) return 0;
+
+    // Check if the terminal container overlaps the status bar horizontally and vertically
+    const overlapsX = termRect.right > sbRect.left && termRect.left < sbRect.right;
+    const overlapsY = termRect.bottom > sbRect.top && termRect.top < sbRect.bottom;
+
+    if (overlapsX && overlapsY) {
+      return Math.max(0, Math.ceil(termRect.bottom - sbRect.top));
+    }
+    return 0;
+  }
+
   private handleResize() {
     if (!this.terminal || !this.terminalContainerEl) return;
     try {
+      const statusBar = document.querySelector('.status-bar');
+      if (statusBar && !this.statusBarObserved) {
+        this.statusBarObserved = true;
+        this.resizeObserver?.observe(statusBar);
+      }
+
+      const overlap = this.getStatusBarOverlap();
+      const currentPb = parseFloat(this.terminalContainerEl.style.paddingBottom) || 0;
+      const targetPb = overlap > 0 ? overlap + 2 : 0;
+      if (Math.abs(targetPb - currentPb) >= 1) {
+        this.terminalContainerEl.style.paddingBottom = targetPb > 0 ? `${targetPb}px` : '';
+      }
+
       // xterm internals: the cell size its renderer measured, to fit the pane exactly.
       const core = (this.terminal as Terminal & {
         _core?: { _renderService?: { dimensions?: { css: { cell: { width: number; height: number } } }; clear?: () => void } };
       })._core;
       const dims = core?._renderService?.dimensions;
       if (dims && dims.css.cell.width > 0 && dims.css.cell.height > 0) {
-        const width = this.terminalContainerEl.clientWidth;
-        const height = this.terminalContainerEl.clientHeight;
-        const cols = Math.max(10, Math.floor(width / dims.css.cell.width));
-        const rows = Math.max(5, Math.floor(height / dims.css.cell.height));
+        const basePaddingX = 16;
+        const availableWidth = Math.max(0, this.terminalContainerEl.clientWidth - basePaddingX);
+        const style = window.getComputedStyle(this.terminalContainerEl);
+        const paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+        const availableHeight = Math.max(0, this.terminalContainerEl.clientHeight - paddingY);
+        const cols = Math.max(10, Math.floor(availableWidth / dims.css.cell.width));
+        const rows = Math.max(5, Math.floor(availableHeight / dims.css.cell.height));
+
+        // Center the terminal canvas symmetrically by balancing remaining horizontal space
+        if (this.terminalContainerEl.clientWidth > 0) {
+          const usedWidth = cols * dims.css.cell.width;
+          const totalPadX = Math.max(basePaddingX, this.terminalContainerEl.clientWidth - usedWidth);
+          const padLeft = Math.floor(totalPadX / 2);
+          const padRight = totalPadX - padLeft;
+          const currentPl = parseFloat(this.terminalContainerEl.style.paddingLeft) || 0;
+          const currentPr = parseFloat(this.terminalContainerEl.style.paddingRight) || 0;
+          if (Math.abs(padLeft - currentPl) >= 1) {
+            this.terminalContainerEl.style.paddingLeft = `${padLeft}px`;
+          }
+          if (Math.abs(padRight - currentPr) >= 1) {
+            this.terminalContainerEl.style.paddingRight = `${padRight}px`;
+          }
+        }
+
         if (this.terminal.cols !== cols || this.terminal.rows !== rows) {
           core._renderService?.clear?.();
           this.terminal.resize(cols, rows);

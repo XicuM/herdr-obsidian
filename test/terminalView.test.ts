@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TFile, TFolder, notices } from 'obsidian';
 import { HerdrTerminalView } from '../src/terminalView';
 
@@ -226,5 +226,165 @@ describe('renderTabs', () => {
     plusBtn.click();
     expect(plugin.newShellTab).toHaveBeenCalledTimes(1);
     expect(plugin.promptNewConversation).not.toHaveBeenCalled();
+  });
+});
+
+describe('getStatusBarOverlap', () => {
+  let statusBar: HTMLElement;
+
+  beforeEach(() => {
+    view.terminalContainerEl = document.createElement('div');
+    document.body.appendChild(view.terminalContainerEl);
+    statusBar = document.createElement('div');
+    statusBar.className = 'status-bar';
+    document.body.appendChild(statusBar);
+  });
+
+  afterEach(() => {
+    view.terminalContainerEl?.remove();
+    statusBar?.remove();
+  });
+
+  it('returns 0 when status bar has zero dimensions', () => {
+    expect(view.getStatusBarOverlap()).toBe(0);
+  });
+
+  it('calculates overlap when status bar sits at bottom-right of terminal', () => {
+    vi.spyOn(statusBar, 'getBoundingClientRect').mockReturnValue({
+      top: 770,
+      bottom: 800,
+      left: 800,
+      right: 1200,
+      width: 400,
+      height: 30
+    } as any);
+    vi.spyOn(view.terminalContainerEl, 'getBoundingClientRect').mockReturnValue({
+      top: 40,
+      bottom: 800,
+      left: 800,
+      right: 1200,
+      width: 400,
+      height: 760
+    } as any);
+
+    expect(view.getStatusBarOverlap()).toBe(30);
+  });
+
+  it('returns 0 when terminal is horizontally non-overlapping (e.g. left side)', () => {
+    vi.spyOn(statusBar, 'getBoundingClientRect').mockReturnValue({
+      top: 770,
+      bottom: 800,
+      left: 800,
+      right: 1200,
+      width: 400,
+      height: 30
+    } as any);
+    vi.spyOn(view.terminalContainerEl, 'getBoundingClientRect').mockReturnValue({
+      top: 40,
+      bottom: 800,
+      left: 0,
+      right: 300,
+      width: 300,
+      height: 760
+    } as any);
+
+    expect(view.getStatusBarOverlap()).toBe(0);
+  });
+});
+
+describe('handleResize with status bar and padding', () => {
+  it('applies paddingBottom and calculates cols and rows accounting for padding', () => {
+    const container = document.createElement('div');
+    container.style.paddingLeft = '8px';
+    container.style.paddingRight = '8px';
+    document.body.appendChild(container);
+
+    Object.defineProperty(container, 'clientWidth', { value: 416, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: 800, configurable: true });
+
+    view.terminalContainerEl = container;
+    view.getStatusBarOverlap = vi.fn(() => 30);
+
+    const resizeMock = vi.fn();
+    const clearMock = vi.fn();
+    view.terminal = {
+      cols: 0,
+      rows: 0,
+      resize: resizeMock,
+      _core: {
+        _renderService: {
+          dimensions: {
+            css: { cell: { width: 8, height: 16 } }
+          },
+          clear: clearMock
+        }
+      }
+    };
+
+    view.handleResize();
+
+    // overlap (30) + 2 buffer = 32px paddingBottom
+    expect(container.style.paddingBottom).toBe('32px');
+    // available width: 416 - (8 + 8) = 400 => 400 / 8 = 50 cols
+    // available height: 800 - 32 = 768 => 768 / 16 = 48 rows
+    expect(resizeMock).toHaveBeenCalledWith(50, 48);
+    // Symmetrical padding: 416 - (50 * 8) = 16px slack => 8px left, 8px right
+    expect(container.style.paddingLeft).toBe('8px');
+    expect(container.style.paddingRight).toBe('8px');
+
+    container.remove();
+  });
+
+  it('balances extra horizontal slack equally between left and right', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+
+    // 422 total width: 422 - 16 = 406 available => 50 cols (400px), 22px remaining slack => 11px left, 11px right
+    Object.defineProperty(container, 'clientWidth', { value: 422, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: 800, configurable: true });
+
+    view.terminalContainerEl = container;
+    view.getStatusBarOverlap = vi.fn(() => 0);
+
+    const resizeMock = vi.fn();
+    view.terminal = {
+      cols: 0,
+      rows: 0,
+      resize: resizeMock,
+      _core: {
+        _renderService: {
+          dimensions: {
+            css: { cell: { width: 8, height: 16 } }
+          },
+          clear: vi.fn()
+        }
+      }
+    };
+
+    view.handleResize();
+
+    expect(resizeMock).toHaveBeenCalledWith(50, 50);
+    expect(container.style.paddingLeft).toBe('11px');
+    expect(container.style.paddingRight).toBe('11px');
+
+    container.remove();
+  });
+
+  it('clears paddingBottom when status bar does not overlap', () => {
+    const container = document.createElement('div');
+    container.style.paddingBottom = '32px';
+    document.body.appendChild(container);
+
+    Object.defineProperty(container, 'clientWidth', { value: 400, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: 800, configurable: true });
+
+    view.terminalContainerEl = container;
+    view.terminal = { cols: 80, rows: 24, resize: vi.fn() };
+    view.getStatusBarOverlap = vi.fn(() => 0);
+
+    view.handleResize();
+
+    expect(container.style.paddingBottom).toBe('');
+    container.remove();
   });
 });

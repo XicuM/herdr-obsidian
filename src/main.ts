@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownPreviewView, MarkdownView, Menu, TFile, TFolder, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
+import { App, Editor, MarkdownPreviewView, MarkdownView, Menu, TFile, TFolder, Plugin, normalizePath, PluginSettingTab, SettingDefinitionItem, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { TerminalStream, TerminalStreamCallbacks } from './terminalStream';
 import { VaultSync, SyncLedger, RemoteChange, isSyncablePath } from './vaultSync';
@@ -841,124 +841,127 @@ class HerdrSettingTab extends PluginSettingTab {
   }
 
   /** The bridge host and token when the tab opened, to tell whether closing it must move the terminal. */
-  private shownBridge = '';
+  private shownBridge: string | null = null;
+
+  override getControlValue(key: string): unknown {
+    if (this.shownBridge === null) {
+      const { bridgeHost, bridgeToken } = this.plugin.settings;
+      this.shownBridge = `${bridgeHost}\n${bridgeToken}`;
+    }
+    return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+  }
+
+  override async setControlValue(key: string, value: unknown): Promise<void> {
+    const val = typeof value === 'string' ? value.trim() : value;
+    (this.plugin.settings as unknown as Record<string, unknown>)[key] = val;
+    await this.plugin.saveSettings();
+    if (key === 'themeMode' || key === 'fontSize') {
+      this.plugin.getTerminalView()?.updateSettings();
+    }
+  }
 
   hide(): void {
     this.plugin.connect();
     const { bridgeHost, bridgeToken } = this.plugin.settings;
-    if (`${bridgeHost}\n${bridgeToken}` !== this.shownBridge) {
+    if (this.shownBridge !== null && `${bridgeHost}\n${bridgeToken}` !== this.shownBridge) {
       this.plugin.getTerminalView()?.resume();
     }
+    this.shownBridge = null;
   }
 
-  display(): void {
-    const { containerEl } = this;
-    const { settings } = this.plugin;
-    this.shownBridge = `${settings.bridgeHost}\n${settings.bridgeToken}`;
-    containerEl.empty();
-
-    new Setting(containerEl)
-      .setName('Theme mode')
-      .setDesc("Follow Obsidian's theme, or force dark or light terminal colors.")
-      .addDropdown((drop) =>
-        drop
-          .addOption('auto', 'Follow Obsidian')
-          .addOption('dark', 'Dark')
-          .addOption('light', 'Light')
-          .setValue(settings.themeMode)
-          .onChange(async (val) => {
-            settings.themeMode = val as HerdrSettings['themeMode'];
-            await this.plugin.saveSettings();
-            this.plugin.getTerminalView()?.updateSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName('Font size')
-      .setDesc('Terminal font size in pixels.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(8, 32, 1)
-          .setValue(settings.fontSize)
-          .onChange(async (val) => {
-            settings.fontSize = val;
-            await this.plugin.saveSettings();
-            this.plugin.getTerminalView()?.updateSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName('Prefix dropped files with @')
-      .setDesc("Insert paths in each agent's own mention syntax (@notes/spec.md for Claude, notes/spec.md for Codex). Shell tabs get a plain path.")
-      .addToggle((toggle) =>
-        toggle.setValue(settings.addAtPrefixOnDrop).onChange(async (val) => {
-          settings.addAtPrefixOnDrop = val;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName('Let agents open notes')
-      .setDesc('Agents can ask Obsidian to show a note, heading or line from this vault with herdr-bridge open.')
-      .addToggle((toggle) =>
-        toggle.setValue(settings.allowAgentOpen).onChange(async (val) => {
-          settings.allowAgentOpen = val;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl).setName('Connection').setHeading();
-
-    new Setting(containerEl)
-      .setName('Bridge host')
-      .setDesc(`host:port of herdr-bridge. Empty: this machine (${LOCAL_BRIDGE}). From a phone: the laptop's address, e.g. its Tailscale IP 100.85.12.34:7788.`)
-      .addText((text) =>
-        text
-          .setPlaceholder(LOCAL_BRIDGE)
-          .setValue(settings.bridgeHost)
-          .onChange(async (val) => {
-            settings.bridgeHost = val.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName('Bridge token')
-      .setDesc('Shown by running herdr-bridge --print-token on the machine running herdr-bridge.')
-      .addText((text) => {
-        text.inputEl.type = 'password';
-        text
-          .setPlaceholder('Token')
-          .setValue(settings.bridgeToken)
-          .onChange(async (val) => {
-            settings.bridgeToken = val.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-
-    if (!this.plugin.isRemoteBridge()) return;
-
-    new Setting(containerEl).setName('Vault sync').setHeading();
-
-    new Setting(containerEl)
-      .setName('Sync automatically')
-      .setDesc("Sync with the laptop's vault of the same name when Obsidian opens or comes back to the foreground.")
-      .addToggle((toggle) =>
-        toggle.setValue(settings.autoSyncOnOpen).onChange(async (val) => {
-          settings.autoSyncOnOpen = val;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName('Sync now')
-      .setDesc("Pull the laptop's changes to this vault and push this vault's changes to the laptop.")
-      .addButton((btn) =>
-        btn
-          .setButtonText('Sync')
-          .setCta()
-          .onClick(() => void this.plugin.syncVault(true))
-      );
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: 'Theme mode',
+        desc: "Follow Obsidian's theme, or force dark or light terminal colors.",
+        control: {
+          key: 'themeMode',
+          type: 'dropdown',
+          options: {
+            auto: 'Follow Obsidian',
+            dark: 'Dark',
+            light: 'Light',
+          },
+        },
+      },
+      {
+        name: 'Font size',
+        desc: 'Terminal font size in pixels.',
+        control: {
+          key: 'fontSize',
+          type: 'slider',
+          min: 8,
+          max: 32,
+          step: 1,
+        },
+      },
+      {
+        name: 'Prefix dropped files with @',
+        desc: "Insert paths in each agent's own mention syntax (@notes/spec.md for Claude, notes/spec.md for Codex). Shell tabs get a plain path.",
+        control: {
+          key: 'addAtPrefixOnDrop',
+          type: 'toggle',
+        },
+      },
+      {
+        name: 'Let agents open notes',
+        desc: 'Agents can ask Obsidian to show a note, heading or line from this vault with herdr-bridge open.',
+        control: {
+          key: 'allowAgentOpen',
+          type: 'toggle',
+        },
+      },
+      {
+        type: 'group',
+        heading: 'Connection',
+        items: [
+          {
+            name: 'Bridge host',
+            desc: `host:port of herdr-bridge. Empty: this machine (${LOCAL_BRIDGE}). From a phone: the laptop's address, e.g. its Tailscale IP 100.85.12.34:7788.`,
+            control: {
+              key: 'bridgeHost',
+              type: 'text',
+              placeholder: LOCAL_BRIDGE,
+            },
+          },
+          {
+            name: 'Bridge token',
+            desc: 'Shown by running herdr-bridge --print-token on the machine running herdr-bridge.',
+            control: {
+              key: 'bridgeToken',
+              type: 'secret',
+            },
+          },
+        ],
+      },
+      {
+        type: 'group',
+        heading: 'Vault sync',
+        visible: () => this.plugin.isRemoteBridge(),
+        items: [
+          {
+            name: 'Sync automatically',
+            desc: "Sync with the laptop's vault of the same name when Obsidian opens or comes back to the foreground.",
+            control: {
+              key: 'autoSyncOnOpen',
+              type: 'toggle',
+            },
+          },
+          {
+            name: 'Sync now',
+            desc: "Pull the laptop's changes to this vault and push this vault's changes to the laptop.",
+            render: (setting) => {
+              setting.addButton((btn) =>
+                btn
+                  .setButtonText('Sync')
+                  .setCta()
+                  .onClick(() => void this.plugin.syncVault(true))
+              );
+            },
+          },
+        ],
+      },
+    ];
   }
 }
 

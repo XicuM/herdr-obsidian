@@ -57,6 +57,8 @@ export class Plugin {
 export class ItemView {
   leaf: any;
   containerEl: any;
+  app: any;
+  registerEvent(_ref: any) {}
   constructor(leaf: any) {
     this.leaf = leaf;
   }
