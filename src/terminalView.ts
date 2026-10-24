@@ -760,57 +760,63 @@ export class HerdrTerminalView extends ItemView {
         this.switchToTab(c);
       });
 
-      // Drag-and-drop tab reordering
-      tabEl.setAttribute('draggable', 'true');
+      // Drag-and-drop tab reordering (only when multiple tabs exist)
+      const canReorder = convs.length > 1;
+      if (canReorder) {
+        tabEl.setAttribute('draggable', 'true');
 
-      tabEl.addEventListener('dragstart', (e) => {
-        if (e.dataTransfer) {
-          e.dataTransfer.setData('text/plain', c.tab_id);
-          e.dataTransfer.effectAllowed = 'move';
-        }
-        tabEl.addClass('is-dragging');
-      });
-
-      tabEl.addEventListener('dragend', () => {
-        tabEl.removeClass('is-dragging');
-        listEl.querySelectorAll('.herdr-tab-item').forEach((el) => {
-          el.removeClass('drop-target-left');
-          el.removeClass('drop-target-right');
+        tabEl.addEventListener('dragstart', (e) => {
+          if (e.dataTransfer) {
+            e.dataTransfer.setData('application/x-herdr-tab', c.tab_id);
+            e.dataTransfer.setData('text/plain', c.tab_id);
+            e.dataTransfer.effectAllowed = 'move';
+          }
+          tabEl.addClass('is-dragging');
         });
-      });
 
-      tabEl.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        if (e.dataTransfer) {
-          e.dataTransfer.dropEffect = 'move';
-        }
-        const rect = tabEl.getBoundingClientRect();
-        const midX = rect.left + rect.width / 2;
-        if (e.clientX < midX) {
-          tabEl.addClass('drop-target-left');
-          tabEl.removeClass('drop-target-right');
-        } else {
-          tabEl.addClass('drop-target-right');
+        tabEl.addEventListener('dragend', () => {
+          tabEl.removeClass('is-dragging');
+          listEl.querySelectorAll('.herdr-tab-item').forEach((el) => {
+            el.removeClass('drop-target-left');
+            el.removeClass('drop-target-right');
+          });
+        });
+
+        tabEl.addEventListener('dragover', (e) => {
+          if (tabEl.classList.contains('is-dragging')) return;
+          e.preventDefault();
+          if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'move';
+          }
+          const rect = tabEl.getBoundingClientRect();
+          const midX = rect.left + rect.width / 2;
+          if (e.clientX < midX) {
+            tabEl.addClass('drop-target-left');
+            tabEl.removeClass('drop-target-right');
+          } else {
+            tabEl.addClass('drop-target-right');
+            tabEl.removeClass('drop-target-left');
+          }
+        });
+
+        tabEl.addEventListener('dragleave', () => {
           tabEl.removeClass('drop-target-left');
-        }
-      });
+          tabEl.removeClass('drop-target-right');
+        });
 
-      tabEl.addEventListener('dragleave', () => {
-        tabEl.removeClass('drop-target-left');
-        tabEl.removeClass('drop-target-right');
-      });
+        tabEl.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const fromTabId = e.dataTransfer?.getData('application/x-herdr-tab')
+            || e.dataTransfer?.getData('text/plain');
+          tabEl.removeClass('drop-target-left');
+          tabEl.removeClass('drop-target-right');
+          if (!fromTabId || fromTabId === c.tab_id) return;
 
-      tabEl.addEventListener('drop', (e) => {
-        e.preventDefault();
-        const fromTabId = e.dataTransfer?.getData('text/plain');
-        tabEl.removeClass('drop-target-left');
-        tabEl.removeClass('drop-target-right');
-        if (!fromTabId || fromTabId === c.tab_id) return;
-
-        const rect = tabEl.getBoundingClientRect();
-        const isBefore = e.clientX < rect.left + rect.width / 2;
-        void this.plugin.reorderTab(fromTabId, c.tab_id, isBefore);
-      });
+          const rect = tabEl.getBoundingClientRect();
+          const isBefore = e.clientX < rect.left + rect.width / 2;
+          void this.plugin.reorderTab(fromTabId, c.tab_id, isBefore);
+        });
+      }
 
       // Middle click to close tab (matches Obsidian tab behavior)
       tabEl.addEventListener('auxclick', (e) => {

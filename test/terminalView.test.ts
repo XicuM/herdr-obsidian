@@ -227,6 +227,48 @@ describe('renderTabs', () => {
     expect(plugin.newShellTab).toHaveBeenCalledTimes(1);
     expect(plugin.promptNewConversation).not.toHaveBeenCalled();
   });
+
+  it('does not make tab draggable when only one tab exists', () => {
+    plugin.getConversations = () => [{ tab_id: 't1', label: 'shell', status: 'idle' }];
+    plugin.wantsSkillOffer = vi.fn(() => false);
+    view.tabBarEl = createMockEl();
+    view.renderTabs();
+    const tabEl = view.tabBarEl.querySelector('.herdr-tab-item');
+    expect(tabEl).toBeTruthy();
+    expect(tabEl.getAttribute('draggable')).toBeNull();
+  });
+
+  it('makes tabs draggable and sets up reordering when multiple tabs exist', () => {
+    plugin.getConversations = () => [
+      { tab_id: 't1', label: 'shell', status: 'idle' },
+      { tab_id: 't2', label: 'agent', status: 'working' }
+    ];
+    plugin.wantsSkillOffer = vi.fn(() => false);
+    view.tabBarEl = createMockEl();
+    view.renderTabs();
+    const tabs = view.tabBarEl.querySelectorAll('.herdr-tab-item');
+    expect(tabs.length).toBe(2);
+    expect(tabs[0].getAttribute('draggable')).toBe('true');
+    expect(tabs[1].getAttribute('draggable')).toBe('true');
+  });
+
+  it('does not apply drop target indicators when dragging over itself', () => {
+    plugin.getConversations = () => [
+      { tab_id: 't1', label: 'shell', status: 'idle' },
+      { tab_id: 't2', label: 'agent', status: 'working' }
+    ];
+    plugin.wantsSkillOffer = vi.fn(() => false);
+    view.tabBarEl = createMockEl();
+    view.renderTabs();
+    const tabEl = view.tabBarEl.querySelector('.herdr-tab-item') as HTMLElement;
+    tabEl.classList.add('is-dragging');
+
+    const dragOverEvt = new Event('dragover', { cancelable: true });
+    tabEl.dispatchEvent(dragOverEvt);
+
+    expect(tabEl.classList.contains('drop-target-left')).toBe(false);
+    expect(tabEl.classList.contains('drop-target-right')).toBe(false);
+  });
 });
 
 describe('getStatusBarOverlap', () => {

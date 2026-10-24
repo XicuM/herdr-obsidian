@@ -345,6 +345,7 @@ export default class HerdrPlugin extends Plugin {
   }
 
   public async reorderTab(fromTabId: string, targetTabId: string, insertBefore: boolean): Promise<void> {
+    if (fromTabId === targetTabId) return;
     const currentList = this.getConversations().map((c) => c.tab_id);
     const fromIdx = currentList.indexOf(fromTabId);
     if (fromIdx === -1) return;

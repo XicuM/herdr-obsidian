@@ -85,6 +85,12 @@ describe('tab ordering', () => {
     expect(plugin.saveSettings).toHaveBeenCalledTimes(2);
   });
 
+  it('no-ops when reordering a tab onto itself', async () => {
+    await plugin.reorderTab('w1:t1', 'w1:t1', true);
+    expect(ids()).toEqual(['w1:t1', 'w1:t2', 'w1:t3']);
+    expect(plugin.saveSettings).not.toHaveBeenCalled();
+  });
+
   it('next/prev cycle through tabs', async () => {
     plugin.activateConversation = vi.fn();
     plugin.currentActiveTabId = 'w1:t3';
