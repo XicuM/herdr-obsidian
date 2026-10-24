@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownPreviewView, MarkdownView, Menu, TFile, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
+import { App, Editor, MarkdownPreviewView, MarkdownView, Menu, TFile, TFolder, Plugin, normalizePath, PluginSettingTab, Setting, Notice, FileSystemAdapter, WorkspaceLeaf, Platform } from 'obsidian';
 import { HerdrClient, Snapshot } from './herdrClient';
 import { TerminalStream, TerminalStreamCallbacks } from './terminalStream';
 import { VaultSync, SyncLedger, RemoteChange, isSyncablePath } from './vaultSync';
@@ -57,7 +57,6 @@ export default class HerdrPlugin extends Plugin {
   settings: HerdrSettings = DEFAULT_SETTINGS;
   private client!: HerdrClient;
   private resolver!: AgentResolver;
-  private statusBarEl!: HTMLElement;
   private unsubscribeEvents: (() => void) | null = null;
   /** Bumped on each disconnect, so a subscription that resolves afterwards knows it is stale. */
   private connection = 0;
@@ -105,22 +104,6 @@ export default class HerdrPlugin extends Plugin {
       HERDR_VIEW_TYPE,
       (leaf) => new HerdrTerminalView(leaf, this)
     );
-
-    // Create Status Bar Item
-    this.statusBarEl = this.addStatusBarItem();
-    this.statusBarEl.addClass('herdr-status-bar');
-    this.statusBarEl.addEventListener('click', () => {
-      if (!this.client.isConfigured()) {
-        this.openSettings();
-        return;
-      }
-      const blocked = this.getConversations().find((c) => c.status === 'blocked');
-      if (blocked) {
-        void this.activateConversation(blocked);
-        return;
-      }
-      this.pickConversation('switch');
-    });
 
     this.addRibbonIcon('bot', 'Open agent terminal', () => void this.activateTerminalView());
 
@@ -250,6 +233,11 @@ export default class HerdrPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, info) => {
       const ref = info.file ? editorRef(editor, info.file) : null;
       if (ref) this.addSendItem(menu, ref);
+    }));
+    this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
+      const isFolder = file instanceof TFolder;
+      const p = isFolder && !file.path.endsWith('/') ? `${file.path}/` : file.path;
+      this.addSendItem(menu, { path: p });
     }));
     // Reading view leaves selections to Electron's native Copy menu; replace it with ours.
     this.registerDomEvent(document, 'contextmenu', (e) => {
@@ -567,47 +555,7 @@ export default class HerdrPlugin extends Plugin {
     }
   }
 
-  private updateStatusBar(convs: Conversation[], available: boolean) {
-    if (!this.statusBarEl) return;
-    this.statusBarEl.empty();
-    this.statusBarEl.removeClass('is-blocked', 'is-working', 'is-offline');
-
-    if (!available) {
-      this.renderedKey = '';
-      this.statusBarEl.addClass('is-offline');
-      this.statusBarEl.createSpan({ text: 'Herdr (offline)' });
-      this.statusBarEl.setAttribute('aria-label', `herdr-bridge at ${this.bridgeHost()} is unreachable, or its token is missing.`);
-      return;
-    }
-
-    if (convs.length === 0) {
-      this.statusBarEl.createSpan({ text: 'Herdr' });
-      this.statusBarEl.setAttribute('aria-label', 'No active conversations in this vault. Click to open or create one.');
-      return;
-    }
-
-    const blocked = convs.filter((c) => c.status === 'blocked');
-    const working = convs.filter((c) => c.status === 'working');
-
-    const topStatus = blocked.length > 0 ? 'blocked' : working.length > 0 ? 'working' : 'done';
-    this.statusBarEl.createSpan({ cls: `herdr-status-dot status-${topStatus}` });
-
-    if (blocked.length > 0) {
-      this.statusBarEl.addClass('is-blocked');
-      const label = blocked.length === 1
-        ? `${blocked[0].label} blocked`
-        : `${blocked.length} blocked`;
-      this.statusBarEl.createSpan({ text: `Herdr: ${label}` });
-      this.statusBarEl.setAttribute('aria-label', `${blocked.length} agent(s) waiting for input: ${blocked.map((b) => b.label).join(', ')}. Click to attend.`);
-    } else if (working.length > 0) {
-      this.statusBarEl.addClass('is-working');
-      this.statusBarEl.createSpan({ text: `Herdr (${working.length} working)` });
-      this.statusBarEl.setAttribute('aria-label', `${working.length} agent(s) working. Click to open.`);
-    } else {
-      this.statusBarEl.createSpan({ text: `Herdr (${convs.length})` });
-      this.statusBarEl.setAttribute('aria-label', `${convs.length} agent(s) active. Click to open.`);
-    }
-  }
+  private updateStatusBar(_convs: Conversation[], _available: boolean) {}
 
   private pickConversation(mode: 'switch' | 'close') {
     const convs = [...this.convByTab.values()];
@@ -1016,8 +964,8 @@ class HerdrSettingTab extends PluginSettingTab {
 
 interface LineRef {
   path: string;
-  start: number;
-  end: number;
+  start?: number;
+  end?: number;
 }
 
 /** The lines an editor selection covers; a selection ending at a line's start doesn't take that line. */
