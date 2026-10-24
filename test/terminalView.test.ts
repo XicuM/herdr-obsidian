@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TFile, notices } from 'obsidian';
+import { TFile, TFolder, notices } from 'obsidian';
 import { HerdrTerminalView } from '../src/terminalView';
 
 let plugin: any;
@@ -56,6 +56,20 @@ describe('resolveDropPayload', () => {
     expect(view.resolveDropPayload(drop())).toBe('@a.md @"my note.md" ');
   });
 
+  it('drops folders with trailing slashes from the file explorer', () => {
+    plugin.app.dragManager = { draggable: { type: 'folder', folder: { path: 'docs' } } };
+    expect(view.resolveDropPayload(drop())).toBe('@docs/ ');
+
+    plugin.app.dragManager = { draggable: { type: 'folder', file: { path: 'notes/my folder' } } };
+    expect(view.resolveDropPayload(drop())).toBe('@"notes/my folder/" ');
+
+    plugin.app.dragManager = { draggable: { type: 'folders', folders: [{ path: 'docs' }, { path: 'notes/' }] } };
+    expect(view.resolveDropPayload(drop())).toBe('@docs/ @notes/ ');
+
+    plugin.app.dragManager = { draggable: { type: 'files', files: [{ path: 'a.md' }, new TFolder('docs')] } };
+    expect(view.resolveDropPayload(drop())).toBe('@a.md @docs/ ');
+  });
+
   it.each([
     ['codex', '"my note.md" '],
     ['opencode', '@my note.md '],
@@ -83,6 +97,9 @@ describe('resolveDropPayload', () => {
     const f = new TFile('notes/Target.md', 0);
     plugin.app.metadataCache.getFirstLinkpathDest = vi.fn(() => f);
     expect(view.resolveDropPayload(drop({ text: '[[Target#Intro|alias]]' }))).toBe('@notes/Target.md#Intro ');
+    const folder = new TFolder('notes/sub');
+    plugin.app.metadataCache.getFirstLinkpathDest = vi.fn(() => folder);
+    expect(view.resolveDropPayload(drop({ text: '[[sub]]' }))).toBe('@notes/sub/ ');
     plugin.app.metadataCache.getFirstLinkpathDest = vi.fn(() => null);
     expect(view.resolveDropPayload(drop({ text: '[[Missing]]' }))).toBe('@Missing.md ');
   });
@@ -147,5 +164,67 @@ describe('suspend/resume', () => {
     expect(view.stream).toBeNull();
     view.resume();
     expect(view.attachToPane).toHaveBeenCalledWith('w1:p1', true);
+  });
+});
+
+function createMockEl(): any {
+  const enhance = (target: any) => {
+    target.empty = () => { target.innerHTML = ''; };
+    target.scrollIntoView = () => {};
+    target.createDiv = (opts?: { cls?: string; text?: string }) => {
+      const child = document.createElement('div');
+      if (opts?.cls) child.className = opts.cls;
+      if (opts?.text) child.textContent = opts.text;
+      enhance(child);
+      target.appendChild(child);
+      return child;
+    };
+    target.createSpan = (opts?: { cls?: string; text?: string }) => {
+      const child = document.createElement('span');
+      if (opts?.cls) child.className = opts.cls;
+      if (opts?.text) child.textContent = opts.text;
+      enhance(child);
+      target.appendChild(child);
+      return child;
+    };
+    target.createEl = (tag: string, opts?: { cls?: string; text?: string }) => {
+      const child = document.createElement(tag);
+      if (opts?.cls) child.className = opts.cls;
+      if (opts?.text) child.textContent = opts.text;
+      enhance(child);
+      target.appendChild(child);
+      return child;
+    };
+    return target;
+  };
+  return enhance(document.createElement('div'));
+}
+
+describe('renderTabs', () => {
+  it('plus button opens a new terminal tab without prompt', () => {
+    plugin.newShellTab = vi.fn();
+    plugin.promptNewConversation = vi.fn();
+    plugin.wantsSkillOffer = vi.fn(() => false);
+    view.tabBarEl = createMockEl();
+    view.renderTabs();
+    const plusBtn = view.tabBarEl.querySelector('.herdr-tab-actions .herdr-action-btn') as HTMLElement;
+    expect(plusBtn).toBeTruthy();
+    plusBtn.click();
+    expect(plugin.newShellTab).toHaveBeenCalledTimes(1);
+    expect(plugin.promptNewConversation).not.toHaveBeenCalled();
+  });
+
+  it('plus button is also present when conversations list is empty', () => {
+    plugin.newShellTab = vi.fn();
+    plugin.promptNewConversation = vi.fn();
+    plugin.getConversations = () => [];
+    plugin.wantsSkillOffer = vi.fn(() => false);
+    view.tabBarEl = createMockEl();
+    view.renderTabs();
+    const plusBtn = view.tabBarEl.querySelector('.herdr-tab-actions .herdr-action-btn') as HTMLElement;
+    expect(plusBtn).toBeTruthy();
+    plusBtn.click();
+    expect(plugin.newShellTab).toHaveBeenCalledTimes(1);
+    expect(plugin.promptNewConversation).not.toHaveBeenCalled();
   });
 });

@@ -13,12 +13,24 @@ export class Notice {
 export const requestUrl = vi.fn();
 export const normalizePath = (p: string) => p;
 
-export class TFile {
-  path: string;
+export class TAbstractFile {
+  path: string = '';
+}
+
+export class TFile extends TAbstractFile {
   stat: { mtime: number; ctime: number; size: number };
   constructor(path: string, mtime: number) {
+    super();
     this.path = path;
     this.stat = { mtime, ctime: mtime, size: 0 };
+  }
+}
+
+export class TFolder extends TAbstractFile {
+  children: any[] = [];
+  constructor(path: string) {
+    super();
+    this.path = path;
   }
 }
 

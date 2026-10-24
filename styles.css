@@ -296,6 +296,12 @@
   overflow: hidden !important;
 }
 
+/* Hide Obsidian's native view header on Herdr panes so the integrated tab bar sits flush. */
+.workspace-leaf-content[data-type="herdr-obsidian-terminal-view"] > .view-header,
+.workspace-leaf:has(.herdr-view-container) > .workspace-leaf-content > .view-header {
+  display: none !important;
+}
+
 /* Specific enough to beat Obsidian's own .view-content padding. */
 .workspace-leaf-content .view-content.herdr-view-container {
   display: flex;
@@ -418,7 +424,7 @@
 
 /* Active tab: raised with matching background and outline, connects seamlessly below */
 .herdr-tab-item.is-active {
-  background-color: var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary))) !important;
+  background-color: var(--herdr-tab-bg, var(--background-primary)) !important;
   color: var(--tab-text-color-active, var(--text-normal)) !important;
   box-shadow: 0 -1px 0 0 var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
               -1px 0 0 0 var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
@@ -447,14 +453,14 @@
   left: calc(var(--tab-curve, 10px) * -2);
   clip-path: inset(50% calc(var(--tab-curve, 10px) * -1) 0 50%);
   box-shadow: inset 0 0 0 1px var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
-              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary)));
+              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--background-primary));
 }
 
 .herdr-tab-item.is-active::after {
   right: calc(var(--tab-curve, 10px) * -2);
   clip-path: inset(50% 50% 0 calc(var(--tab-curve, 10px) * -1));
   box-shadow: inset 0 0 0 1px var(--tab-outline-color, var(--divider-color, var(--background-modifier-border))),
-              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--tab-background-active, var(--background-primary)));
+              0 0 0 calc(var(--tab-curve, 10px) * 4) var(--herdr-tab-bg, var(--background-primary));
 }
 
 /* Inner tab container */
@@ -548,30 +554,30 @@
 }
 
 .herdr-status-dot.status-blocked {
-  background-color: #f38ba8;
-  border: 1.5px solid #f38ba8;
-  box-shadow: 0 0 0 2px rgba(243, 139, 168, 0.25);
+  background-color: var(--color-red, var(--text-error, #f38ba8));
+  border: 1.5px solid var(--color-red, var(--text-error, #f38ba8));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-red, var(--text-error, #f38ba8)) 25%, transparent);
 }
 
 .herdr-status-dot.status-working {
-  background-color: #f9e2af;
-  border: 1.5px solid #f9e2af;
+  background-color: var(--color-yellow, var(--text-warning, #f9e2af));
+  border: 1.5px solid var(--color-yellow, var(--text-warning, #f9e2af));
   animation: herdr-pulse 1.8s infinite;
 }
 
 .herdr-status-dot.status-done {
-  background-color: #a6e3a1;
-  border: 1.5px solid #a6e3a1;
+  background-color: var(--color-green, var(--text-success, #a6e3a1));
+  border: 1.5px solid var(--color-green, var(--text-success, #a6e3a1));
 }
 
 .herdr-status-dot.status-idle {
   background-color: transparent;
-  border: 1.5px solid #6c7086;
+  border: 1.5px solid var(--color-base-50, var(--text-muted, #6c7086));
 }
 
 .herdr-status-dot.status-unknown {
   background-color: transparent;
-  border: 1.5px dashed #6c7086;
+  border: 1.5px dashed var(--color-base-50, var(--text-muted, #6c7086));
 }
 
 @keyframes herdr-pulse {

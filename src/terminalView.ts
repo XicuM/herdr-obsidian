@@ -1,4 +1,4 @@
-import { App, ItemView, WorkspaceLeaf, Menu, Notice, TFile, setIcon, Platform } from 'obsidian';
+import { App, ItemView, WorkspaceLeaf, Menu, Notice, TFile, TFolder, TAbstractFile, setIcon, Platform } from 'obsidian';
 import { IBufferLine, ILink, Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Conversation } from './resolver';
@@ -616,20 +616,18 @@ export class HerdrTerminalView extends ItemView {
       const newShellBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New shell' });
       newShellBtn.setAttribute('aria-label', 'Open a new shell tab');
       newShellBtn.addEventListener('click', () => void this.plugin.newShellTab());
-      return;
-    }
+    } else {
+      const listEl = this.tabBarEl.createDiv({ cls: 'herdr-tab-list' });
 
-    const listEl = this.tabBarEl.createDiv({ cls: 'herdr-tab-list' });
+      // Enable horizontal scroll on mouse wheel over tab list
+      listEl.addEventListener('wheel', (e) => {
+        if (e.deltaY !== 0 && listEl.scrollWidth > listEl.clientWidth) {
+          e.preventDefault();
+          listEl.scrollLeft += e.deltaY;
+        }
+      }, { passive: false });
 
-    // Enable horizontal scroll on mouse wheel over tab list
-    listEl.addEventListener('wheel', (e) => {
-      if (e.deltaY !== 0 && listEl.scrollWidth > listEl.clientWidth) {
-        e.preventDefault();
-        listEl.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
-
-    for (const c of convs) {
+      for (const c of convs) {
       const isActive = c.tab_id === this.currentTabId;
       const tabEl = listEl.createDiv({
         cls: `herdr-tab-item ${isActive ? 'is-active' : ''}`
@@ -780,6 +778,7 @@ export class HerdrTerminalView extends ItemView {
         tabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     }
+  }
 
     // Tab action on the right: native new-tab button with Lucide 'plus'
     const actionsEl = this.tabBarEl.createDiv({ cls: 'herdr-tab-actions' });
@@ -870,8 +869,8 @@ export class HerdrTerminalView extends ItemView {
     this.send(() => this.resolveDropPayload(e));
   }
 
-  /** Points the active tab's agent at lines `start`-`end` (1-based) of a vault file. */
-  public sendReference(path: string, start: number, end: number) {
+  /** Points the active tab's agent at lines `start`-`end` (1-based) of a vault file, or a file/folder path. */
+  public sendReference(path: string, start?: number, end?: number) {
     this.send(() => this.formatPath(path, start, end));
   }
 
@@ -924,14 +923,40 @@ export class HerdrTerminalView extends ItemView {
     // 1. Check Obsidian's internal DragManager (dragging from File Explorer)
     // Obsidian internals: what its file explorer is dragging.
     const draggable = (this.plugin.app as App & {
-      dragManager?: { draggable?: { type: string; file?: TFile; files?: TFile[] } };
+      dragManager?: {
+        draggable?: {
+          type: string;
+          file?: { path: string };
+          files?: { path: string }[];
+          folder?: { path: string };
+          folders?: { path: string }[];
+        };
+      };
     }).dragManager?.draggable;
     if (draggable) {
       if (draggable.type === 'file' && draggable.file?.path) {
         return this.formatPath(draggable.file.path);
       }
+      if (draggable.type === 'folder') {
+        const folder = draggable.folder ?? draggable.file;
+        if (folder?.path) {
+          const p = folder.path.endsWith('/') ? folder.path : `${folder.path}/`;
+          return this.formatPath(p);
+        }
+      }
       if (draggable.type === 'files' && Array.isArray(draggable.files)) {
-        const paths = draggable.files.filter((f) => f?.path).map((f) => this.formatPath(f.path));
+        const paths = draggable.files.filter((f) => f?.path).map((f) => {
+          const isFolder = f instanceof TFolder || 'children' in f;
+          const p = isFolder && !f.path.endsWith('/') ? `${f.path}/` : f.path;
+          return this.formatPath(p);
+        });
+        if (paths.length > 0) return paths.join('');
+      }
+      if (draggable.type === 'folders' && Array.isArray(draggable.folders)) {
+        const paths = draggable.folders.filter((f) => f?.path).map((f) => {
+          const p = f.path.endsWith('/') ? f.path : `${f.path}/`;
+          return this.formatPath(p);
+        });
         if (paths.length > 0) return paths.join('');
       }
     }
@@ -947,10 +972,17 @@ export class HerdrTerminalView extends ItemView {
     if (linkMatch) {
       const linkTarget = linkMatch[1];
       const subpath = linkMatch[2];
-      const dest = this.plugin.app.metadataCache.getFirstLinkpathDest(linkTarget, '');
+      const dest: TAbstractFile | null = this.plugin.app.metadataCache.getFirstLinkpathDest(linkTarget, '')
+        ?? this.plugin.app.vault?.getFolderByPath?.(linkTarget)
+        ?? this.plugin.app.vault?.getAbstractFileByPath?.(linkTarget)
+        ?? null;
       if (dest instanceof TFile) {
         const fileRef = subpath ? `${dest.path}#${subpath}` : dest.path;
         return this.formatPath(fileRef);
+      }
+      if (dest instanceof TFolder) {
+        const folderPath = dest.path.endsWith('/') ? dest.path : `${dest.path}/`;
+        return this.formatPath(folderPath);
       }
       const fallback = linkTarget.endsWith('.md') ? linkTarget : `${linkTarget}.md`;
       const fileRef = subpath ? `${fallback}#${subpath}` : fallback;
