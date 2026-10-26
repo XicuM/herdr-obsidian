@@ -683,13 +683,10 @@ export class HerdrTerminalView extends ItemView {
 
     if (convs.length === 0) {
       const emptyWrap = this.tabBarEl.createDiv({ cls: 'herdr-tab-empty' });
-      emptyWrap.createSpan({ text: 'No agent tabs' });
-      const newAgentBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New agent' });
-      newAgentBtn.setAttribute('aria-label', 'Start a new agent conversation');
-      newAgentBtn.addEventListener('click', () => this.plugin.promptNewConversation());
-      const newShellBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New shell' });
-      newShellBtn.setAttribute('aria-label', 'Open a new shell tab');
-      newShellBtn.addEventListener('click', () => void this.plugin.newShellTab());
+      emptyWrap.createSpan({ text: 'No terminal tabs' });
+      const newTabBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New terminal tab' });
+      newTabBtn.setAttribute('aria-label', 'New terminal tab');
+      newTabBtn.addEventListener('click', () => void this.plugin.newShellTab());
     } else {
       const listEl = this.tabBarEl.createDiv({ cls: 'herdr-tab-list' });
 

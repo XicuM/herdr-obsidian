@@ -4,7 +4,7 @@ import { HARNESS_KINDS } from './herdrClient';
 
 export interface ActionItem {
   id: string;
-  type: 'conversation' | 'new_shell' | 'close_conversation' | 'open_settings';
+  type: 'conversation' | 'close_conversation';
   title: string;
   description: string;
   conv?: Conversation;
@@ -22,7 +22,7 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
   ) {
     super(app);
     this.onSelectAction = onSelectAction;
-    this.setPlaceholder(mode === 'close' ? 'Select a tab to close...' : 'Switch Herdr agent tab or action...');
+    this.setPlaceholder(mode === 'close' ? 'Select a tab to close...' : 'Switch terminal tab...');
 
     if (mode === 'close') {
       this.items = convs.map((c) => {
@@ -48,20 +48,6 @@ export class HerdrSwitcherModal extends FuzzySuggestModal<ActionItem> {
         conv: c
       });
     }
-
-    this.items.push({
-      id: '__shell__',
-      type: 'new_shell',
-      title: 'New shell tab',
-      description: 'Open a plain shell tab in this vault workspace'
-    });
-
-    this.items.push({
-      id: '__settings__',
-      type: 'open_settings',
-      title: 'Configure Herdr',
-      description: 'Open the plugin settings'
-    });
   }
 
   getItems(): ActionItem[] {

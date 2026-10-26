@@ -116,19 +116,19 @@ export default class HerdrPlugin extends Plugin {
 
     this.addCommand({
       id: 'switch-conversation',
-      name: 'Switch agent conversation',
+      name: 'Switch terminal tab',
       callback: () => this.pickConversation('switch')
     });
 
     this.addCommand({
       id: 'switch-next',
-      name: 'Next agent conversation',
+      name: 'Next terminal tab',
       callback: () => this.switchNext()
     });
 
     this.addCommand({
       id: 'switch-prev',
-      name: 'Previous agent conversation',
+      name: 'Previous terminal tab',
       callback: () => this.switchPrev()
     });
 
@@ -140,7 +140,7 @@ export default class HerdrPlugin extends Plugin {
 
     this.addCommand({
       id: 'new-shell-tab',
-      name: 'New shell tab',
+      name: 'New terminal tab',
       callback: () => void this.newShellTab()
     });
 
@@ -568,10 +568,6 @@ export default class HerdrPlugin extends Plugin {
           void this.activateConversation(item.conv);
         } else if (item.type === 'close_conversation' && item.conv) {
           void this.closeConversationTab(item.conv);
-        } else if (item.type === 'new_shell') {
-          void this.newShellTab();
-        } else if (item.type === 'open_settings') {
-          this.openSettings();
         }
       },
       mode

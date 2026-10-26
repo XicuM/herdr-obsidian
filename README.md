@@ -56,7 +56,7 @@ Only if you approve the one-time offer (or run **Install agent skill**) is `.age
 - Double-click a tab to rename it, right-click for the context menu, middle-click to close.
 - Drag tabs to reorder them; the order is persisted in settings.
 - Keyboard navigation: `Enter` / `Space` activates a tab, `←` / `→` moves focus.
-- The `+` button opens a new shell tab in the vault workspace. When no tabs exist, the bar offers **New agent** and **New shell** buttons.
+- The `+` button opens a new shell tab in the vault workspace. When no tabs exist, **New terminal tab** does the same without an agent picker.
 - Mouse wheel and `Shift+PageUp` / `Shift+PageDown` scroll the remote pane without disturbing text selection.
 - `Ctrl`/`Cmd`+`C` copies a selection, `Ctrl`/`Cmd`+`V` pastes. A real `Ctrl+C` with no selection still sends `SIGINT`.
 - File paths and URLs in the buffer are clickable. `Ctrl`/`Cmd`+click opens the link in a new tab.
@@ -71,9 +71,9 @@ Only if you approve the one-time offer (or run **Install agent skill**) is `.age
 
 ### Fast switching
 
-- **Switch agent conversation** opens a fuzzy picker with blocked agents sorted to the top.
-- **Next agent conversation** / **Previous agent conversation** cycle tabs from anywhere, in your tab order.
-- The picker also exposes **New shell tab**, **Refresh status**, and a **Close conversation** mode.
+- **Switch terminal tab** opens a fuzzy picker with blocked agents sorted to the top.
+- **Next terminal tab** / **Previous terminal tab** cycle tabs from anywhere, in your tab order.
+- The switcher lists only existing tabs. **Close conversation** opens a separate picker for closing tabs.
 - All herdr harnesses are available: `agy`, `amp`, `claude`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `grok`, `kimi`, `kiro`, `maki`, `opencode`, `pi`, and `qwen`.
 
 ### Drag-and-drop references
@@ -131,7 +131,7 @@ Then open **Settings → Community plugins**, reload the plugin list, and enable
 1. Run herdr-bridge where your agents run, and print its token there: `herdr-bridge --print-token`.
 2. In the plugin settings, enter the token. On a phone, also set **Bridge host** to that machine's address (e.g. `100.85.12.34:7788`).
 3. Run **Herdr: Open terminal view** from the command palette.
-4. Create an agent with **Herdr: New agent conversation**, or open a shell with **Herdr: New shell tab**.
+4. Create an agent with **Herdr: New agent conversation**, or open a shell with **Herdr: New terminal tab**.
 5. Tabs created in herdr for the same vault workspace appear automatically.
 
 The embedded view takes over a pane while it is attached; other herdr clients step aside, and switching tabs or closing the view releases it.
@@ -141,11 +141,11 @@ The embedded view takes over a pane while it is attached; other herdr clients st
 | Command | Description |
 | --- | --- |
 | `Herdr: Open terminal view` | Show or focus the embedded terminal. |
-| `Herdr: Switch agent conversation` | Fuzzy-switch tabs, close a tab, or run quick actions. |
-| `Herdr: Next agent conversation` | Cycle to the next agent tab. |
-| `Herdr: Previous agent conversation` | Cycle to the previous agent tab. |
+| `Herdr: Switch terminal tab` | Fuzzy-switch existing terminal tabs. |
+| `Herdr: Next terminal tab` | Cycle to the next terminal tab. |
+| `Herdr: Previous terminal tab` | Cycle to the previous terminal tab. |
 | `Herdr: New agent conversation` | Pick a harness (`claude`, `codex`, `opencode`, `agy`, `grok`, …) and start it. |
-| `Herdr: New shell tab` | Open a plain shell in the vault workspace. |
+| `Herdr: New terminal tab` | Open a plain shell in the vault workspace. |
 | `Herdr: Rename active tab` | Rename the active herdr tab. |
 | `Herdr: Close conversation` | Pick a tab to close. |
 | `Herdr: Focus vault workspace` | Ask herdr to focus this vault's workspace. |
