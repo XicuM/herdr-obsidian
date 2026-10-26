@@ -4,7 +4,8 @@ import { Platform, requestUrl, notices, FileSystemAdapter } from 'obsidian';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import HerdrPlugin from '../src/main';
+import HerdrPlugin, { HerdrSettingTab } from '../src/main';
+import { HerdrClient } from '../src/herdrClient';
 import { AgentResolver } from '../src/resolver';
 import { TerminalStream } from '../src/terminalStream';
 
@@ -49,7 +50,44 @@ describe('settings and client selection', () => {
   it('loads defaults merged with saved data', async () => {
     plugin.loadData = async () => ({ fontSize: 18 });
     await plugin.loadSettings();
-    expect(plugin.settings).toMatchObject({ fontSize: 18, themeMode: 'auto', autoSyncOnOpen: true, bridgeHost: '' });
+    expect(plugin.settings).toMatchObject({ fontSize: 18, themeMode: 'auto', autoSyncOnOpen: true, bridgeHost: '', sendToAgentMenu: true });
+  });
+
+  it('recovers a token saved as a secret ID and authenticates with its value', async () => {
+    plugin.loadData = async () => ({ bridgeToken: 'laptop-bridge' });
+    plugin.app.secretStorage = { getSecret: vi.fn(() => 'K3MF-9QXA') };
+    await plugin.loadSettings();
+    expect(plugin.app.secretStorage.getSecret).toHaveBeenCalledWith('laptop-bridge');
+    expect(plugin.settings.bridgeToken).toBe('K3MF-9QXA');
+    expect(plugin.saveSettings).toHaveBeenCalledOnce();
+
+    vi.mocked(requestUrl).mockResolvedValue({ status: 200, json: { tabs: [] } } as any);
+    await new HerdrClient({ host: '127.0.0.1:7788', token: plugin.settings.bridgeToken }).snapshot();
+    expect(requestUrl).toHaveBeenCalledWith(expect.objectContaining({
+      headers: { Authorization: 'Bearer K3MF-9QXA' }
+    }));
+  });
+
+  it('preserves existing raw tokens and unresolved secret IDs', async () => {
+    plugin.app.secretStorage = { getSecret: vi.fn(() => null) };
+    for (const token of ['K3MF-9QXA', 'legacy-token-longer-than-eight', 'missing-secret']) {
+      plugin.loadData = async () => ({ bridgeToken: token });
+      await plugin.loadSettings();
+      expect(plugin.settings.bridgeToken).toBe(token);
+    }
+    expect(plugin.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('controls the "Send to agent" context menu item via sendToAgentMenu setting', () => {
+    const menu = { addItem: vi.fn().mockReturnThis() } as any;
+    plugin.settings.sendToAgentMenu = true;
+    plugin.addSendItem(menu, { path: 'note.md' });
+    expect(menu.addItem).toHaveBeenCalledTimes(1);
+
+    menu.addItem.mockClear();
+    plugin.settings.sendToAgentMenu = false;
+    plugin.addSendItem(menu, { path: 'note.md' });
+    expect(menu.addItem).not.toHaveBeenCalled();
   });
 
   it('defaults to the bridge on this machine, and tells local bridges from remote ones', () => {
@@ -63,6 +101,94 @@ describe('settings and client selection', () => {
       plugin.settings.bridgeHost = host;
       expect(plugin.isRemoteBridge()).toBe(true);
     }
+  });
+});
+
+describe('bridge token field', () => {
+  let tab: HerdrSettingTab;
+  let input: HTMLInputElement;
+  let toggle: HTMLButtonElement;
+
+  beforeEach(() => {
+    tab = new HerdrSettingTab(plugin.app, plugin);
+    input = document.createElement('input');
+    toggle = document.createElement('button');
+    plugin.settings.bridgeToken = 'K3MF-9QXA';
+    const connection = tab.getSettingDefinitions().find((item: any) => item.heading === 'Connection') as any;
+    connection.items.find((item: any) => item.name === 'Bridge token').render({
+      addText(cb: any) {
+        cb({
+          inputEl: input,
+          setPlaceholder(value: string) { input.placeholder = value; return this; },
+          setValue(value: string) { input.value = value; return this; },
+          onChange(cb: any) { input.addEventListener('input', () => cb(input.value)); return this; }
+        });
+      },
+      addExtraButton(cb: any) {
+        cb({
+          setIcon(value: string) { toggle.dataset.icon = value; return this; },
+          setTooltip(value: string) { toggle.title = value; return this; },
+          onClick(cb: any) { toggle.addEventListener('click', cb); return this; }
+        });
+      }
+    });
+  });
+
+  it('uses one field and hides a saved token until revealed', () => {
+    expect(input.type).toBe('password');
+    expect(input.value).toBe('K3MF-9QXA');
+    expect(input.placeholder).toBe('Token');
+    expect(input.spellcheck).toBe(false);
+    expect(input.autocomplete).toBe('off');
+    expect(toggle.title).toBe('Show token');
+    toggle.click();
+    expect(input.type).toBe('text');
+    expect(toggle.title).toBe('Hide token');
+    toggle.click();
+    expect(input.type).toBe('password');
+    expect(plugin.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('groups a pasted token, saves its characters, and reconnects when settings close', () => {
+    input.value = ' abcd efgh ';
+    input.dispatchEvent(new Event('input'));
+    expect(input.value).toBe('ABCD-EFGH');
+    expect(input.selectionStart).toBe(9);
+    expect(plugin.settings.bridgeToken).toBe('ABCDEFGH');
+    expect(plugin.saveSettings).toHaveBeenCalledOnce();
+    plugin.connect = vi.fn();
+    const view = { resume: vi.fn() };
+    plugin.getTerminalView = () => view;
+    tab.hide();
+    expect(plugin.connect).toHaveBeenCalledOnce();
+    expect(view.resume).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the caret when editing and backspacing over a separator', () => {
+    input.value = 'K3MF9QXA';
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new Event('input'));
+    expect(input.value).toBe('K3M9-QXA');
+    expect(input.selectionStart).toBe(3);
+    expect(plugin.settings.bridgeToken).toBe('K3M9QXA');
+
+    input.value = 'K3AM9-QXA';
+    input.setSelectionRange(3, 3);
+    input.dispatchEvent(new Event('input'));
+    expect(input.value).toBe('K3AM-9QXA');
+    expect(input.selectionStart).toBe(3);
+    expect(plugin.settings.bridgeToken).toBe('K3AM9QXA');
+  });
+
+  it('allows longer legacy tokens and clearing the token', () => {
+    input.value = 'abcd-efgh-jkmn';
+    input.dispatchEvent(new Event('input'));
+    expect(input.value).toBe('ABCD-EFGH-JKMN');
+    expect(plugin.settings.bridgeToken).toBe('ABCDEFGHJKMN');
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    expect(input.value).toBe('');
+    expect(plugin.settings.bridgeToken).toBe('');
   });
 });
 

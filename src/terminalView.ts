@@ -71,7 +71,7 @@ export class HerdrTerminalView extends ItemView {
   }
 
   getIcon(): string {
-    return 'bot';
+    return 'herdr';
   }
 
   async onOpen() {
@@ -467,55 +467,7 @@ export class HerdrTerminalView extends ItemView {
 
     trackPhysicalModifiers();
 
-    this.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // Ctrl+C copies a selection, as in VS Code's terminal. Omarchy's SUPER+C arrives as a
-      // synthesized Ctrl+C, so without this a copy gesture would interrupt the remote pane.
-      const isCopyChord = (event.key === 'c' || event.key === 'C' || event.code === 'KeyC') &&
-        (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
-      if (event.type === 'keydown' && isCopyChord) {
-        if (this.terminal?.hasSelection()) {
-          void navigator.clipboard.writeText(this.terminal.getSelection());
-          event.preventDefault();
-          return false;
-        }
-        // Nothing selected: SUPER+C is still a copy gesture, so it must not interrupt. Only a
-        // real Ctrl+C, with the Control key physically down, is allowed through as SIGINT.
-        if (!physicalControlHeld) {
-          event.preventDefault();
-          return false;
-        }
-      }
-
-      // Omarchy's SUPER+V arrives the same way, and left alone it lands in the pane as a literal
-      // ^V. Paste the clipboard instead, the way SUPER+V does everywhere else.
-      const isPasteChord = (event.key === 'v' || event.key === 'V' || event.code === 'KeyV') &&
-        (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
-      if (event.type === 'keydown' && isPasteChord && !physicalControlHeld) {
-        event.preventDefault();
-        void navigator.clipboard.readText().then((text) => {
-          if (text) this.terminal?.paste(text);
-        });
-        return false;
-      }
-
-      // Shift+PageUp/PageDown scroll the remote pane. Shift+Arrow is intentionally
-      // left alone so xterm text selection keeps working.
-      if (event.type === 'keydown' && this.stream?.isRunning) {
-        if (event.shiftKey) {
-          if (event.key === 'PageUp') {
-            const lines = Math.max(1, Math.floor((this.terminal?.rows || 24) / 2));
-            this.stream.scroll('up', lines);
-            return false;
-          }
-          if (event.key === 'PageDown') {
-            const lines = Math.max(1, Math.floor((this.terminal?.rows || 24) / 2));
-            this.stream.scroll('down', lines);
-            return false;
-          }
-        }
-      }
-      return true;
-    });
+    this.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => this.handleCustomKeyEvent(event));
 
     this.terminal.onData((data) => {
       this.stream?.sendInput(data);
@@ -539,6 +491,63 @@ export class HerdrTerminalView extends ItemView {
     window.setTimeout(() => {
       this.handleResize();
     }, 50);
+  }
+
+  public handleCustomKeyEvent(event: KeyboardEvent): boolean {
+    // Ctrl+C copies a selection, as in VS Code's terminal. Omarchy's SUPER+C arrives as a
+    // synthesized Ctrl+C, so without this a copy gesture would interrupt the remote pane.
+    const isCopyChord = (event.key === 'c' || event.key === 'C' || event.code === 'KeyC') &&
+      (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+    if (event.type === 'keydown' && isCopyChord) {
+      if (this.terminal?.hasSelection()) {
+        void navigator.clipboard.writeText(this.terminal.getSelection());
+        event.preventDefault();
+        return false;
+      }
+      // Nothing selected: SUPER+C is still a copy gesture, so it must not interrupt. Only a
+      // real Ctrl+C, with the Control key physically down, is allowed through as SIGINT.
+      if (!physicalControlHeld) {
+        event.preventDefault();
+        return false;
+      }
+    }
+
+    // Omarchy's SUPER+V arrives the same way, and left alone it lands in the pane as a literal
+    // ^V. Paste the clipboard instead, the way SUPER+V does everywhere else.
+    const isPasteChord = (event.key === 'v' || event.key === 'V' || event.code === 'KeyV') &&
+      (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+    if (event.type === 'keydown' && isPasteChord && !physicalControlHeld) {
+      event.preventDefault();
+      void navigator.clipboard.readText().then((text) => {
+        if (text) this.terminal?.paste(text);
+      });
+      return false;
+    }
+
+    // Shift+Enter sends \n (LF) so interactive agents accept multiline prompts
+    // without submitting immediately, matching herdr-mobile.
+    // Shift+PageUp/PageDown scroll the remote pane. Shift+Arrow is intentionally
+    // left alone so xterm text selection keeps working.
+    if (event.type === 'keydown' && this.stream?.isRunning) {
+      if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        if (event.key === 'Enter') {
+          this.stream.sendInput('\n');
+          event.preventDefault();
+          return false;
+        }
+        if (event.key === 'PageUp') {
+          const lines = Math.max(1, Math.floor((this.terminal?.rows || 24) / 2));
+          this.stream.scroll('up', lines);
+          return false;
+        }
+        if (event.key === 'PageDown') {
+          const lines = Math.max(1, Math.floor((this.terminal?.rows || 24) / 2));
+          this.stream.scroll('down', lines);
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   private getStatusBarOverlap(): number {
@@ -971,7 +980,7 @@ export class HerdrTerminalView extends ItemView {
     const colon = lines && `:${lines}`;
     const hashL = lines && `#L${lines}`;
     const quote = (s: string) => (p.includes(' ') ? `"${s}"` : s);
-    if (!this.plugin.settings.addAtPrefixOnDrop || !agent) return `${quote(p)}${colon} `;
+    if (!agent) return `${quote(p)}${colon} `;
 
     switch (agent) {
       // Codex's @ menu inserts a bare path; the @ is only the trigger character. No range syntax: path:line is its convention.

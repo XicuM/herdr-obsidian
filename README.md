@@ -1,16 +1,18 @@
 # Herdr
 
-[![Obsidian 1.7.2+](https://img.shields.io/badge/Obsidian-1.7.2%2B-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md)
+<p align="center">
+  <img src="icon.svg" width="120" height="120" alt="Herdr for Obsidian" />
+</p>
+
+[![Obsidian 1.13.0+](https://img.shields.io/badge/Obsidian-1.13.0%2B-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md)
 [![Desktop and mobile](https://img.shields.io/badge/platform-desktop%20%7C%20mobile-4B5563)](#requirements)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-22C55E)](https://www.gnu.org/licenses/gpl-3.0)
 
 > **Unofficial plugin.** This is a community plugin for [herdr](https://herdr.dev). It is not made, endorsed or supported by the herdr authors, nor by Obsidian.
 
-**herdr, inside Obsidian.** Run, watch, and switch between your herdr AI coding agents without leaving the vault: embedded terminal tabs, live agent status, focus-on-blocked, drag-and-drop file references, and, from a phone, your laptop's agents plus a sync of the vault.
+**herdr, inside Obsidian.** Run, watch, and switch between your herdr AI coding agents without leaving the vault: embedded terminal tabs, live agent status, drag-and-drop file references, and, from a phone, your laptop's agents plus a sync of the vault.
 
 herdr is the terminal workspace manager for coding agents. This plugin puts the same workspace inside Obsidian, so specs, notes, and the agents working on them stay one click apart.
-
-> **Status:** pre-1.0, not yet in the Obsidian community plugin directory.
 
 ## Screenshots
 
@@ -27,9 +29,9 @@ Notes and agents, side by side — the herdr terminal sits in Obsidian's right s
 
 ## Requirements
 
-- [Obsidian](https://obsidian.md) 1.7.2+, desktop or mobile.
+- [Obsidian](https://obsidian.md) 1.13.0+, desktop or mobile, as required by `manifest.json`.
 - [herdr](https://herdr.dev) and [herdr-bridge](https://github.com/XicuM/herdr-bridge) on the machine where your agents run. The plugin talks to herdr only through herdr-bridge.
-- On a phone: a way to reach that machine, e.g. [Tailscale](https://tailscale.com).
+- On a phone: a way to reach that machine, e.g. [Tailscale](https://tailscale.com), connected on both devices. The default bridge listens on `127.0.0.1:7788`; its installer configures Tailscale forwarding for access from other devices.
 
 ### Network use
 
@@ -64,10 +66,8 @@ Only if you approve the one-time offer (or run **Install agent skill**) is `.age
 
 ### Live agent awareness
 
-- Status bar shows blocked and working agents in the current vault workspace, or the number of tabs when none are blocked/working.
-- `Herdr: <agent> blocked` appears the moment an agent needs input; the tooltip lists every blocked agent.
-- Click the status bar to jump straight to a blocked agent, or open the fuzzy switcher when nothing is blocked.
-- Focus-on-blocked only fires on a **transition** into `blocked`; already-blocked agents at startup never trigger a notice.
+- Each terminal tab shows an agent status indicator with a text alternative.
+- **Switch terminal tab** lists blocked agents first, so you can find agents waiting for input.
 
 ### Fast switching
 
@@ -87,7 +87,7 @@ Drag a file from Obsidian's file explorer into the terminal, and the plugin inse
 | opencode, Grok, Antigravity, Copilot | `@note.md` | `@my note.md` |
 | Shell / undetected pane | `note.md` | `"my note.md"` |
 
-This mirrors what each harness's own `@` completion inserts. In our testing, only Claude Code turned raw `@path` text into an inline attachment; the others resolved the path by reading it with their file tools. Turn the behavior off in settings to always insert a plain quoted path.
+This mirrors what each harness's own `@` completion inserts. In our testing, only Claude Code turned raw `@path` text into an inline attachment; the others resolved the path by reading it with their file tools.
 
 Dragging selected text inserts it directly, and multiline text is wrapped in bracketed paste so it cannot execute prematurely. Internal wikilinks (`[[Note]]`, `[[Note#Heading]]`) resolve to file paths. Paths are relative to the vault, which is where the agents run.
 
@@ -126,15 +126,25 @@ cp main.js manifest.json styles.css "<vault>/.obsidian/plugins/herdr/"
 
 Then open **Settings → Community plugins**, reload the plugin list, and enable **Herdr**. On a phone, copy the same three files into each vault's `.obsidian/plugins/herdr/` folder.
 
+Vault sync excludes `.obsidian`, so it does not install or update the plugin or copy its settings. Install the plugin and configure its connection separately on each device.
+
 ## Getting started
 
 1. Run herdr-bridge where your agents run, and print its token there: `herdr-bridge --print-token`.
-2. In the plugin settings, enter the token. On a phone, also set **Bridge host** to that machine's address (e.g. `100.85.12.34:7788`).
+2. In the plugin settings, enter the token in **Bridge token**, e.g. `K3MF-9QXA`. It is one token; no secret ID is needed. The field groups characters in fours and lets you show or hide the value. On a phone, also set **Bridge host** to that machine's address (e.g. `100.85.12.34:7788`).
 3. Run **Herdr: Open terminal view** from the command palette.
 4. Create an agent with **Herdr: New agent conversation**, or open a shell with **Herdr: New terminal tab**.
 5. Tabs created in herdr for the same vault workspace appear automatically.
 
 The embedded view takes over a pane while it is attached; other herdr clients step aside, and switching tabs or closing the view releases it.
+
+### Android setup
+
+1. On the laptop, open the vault in desktop Obsidian with Herdr enabled and the local bridge configured. This creates its workspace in the dedicated `herdr-obsidian` session. The phone can only attach to an existing workspace.
+2. On Android, use Obsidian 1.13.0 or later and install and enable the plugin in a vault with the same name as the laptop's vault.
+3. Keep Tailscale connected on both devices and check the laptop's forwarding with `tailscale serve status`. With the default bridge configuration, sharing a Wi-Fi network alone does not provide access.
+4. In Android's Herdr settings, set **Bridge host** to the laptop's Tailscale address and port, e.g. `100.85.12.34:7788`, and enter the token printed by `herdr-bridge --print-token` on the laptop. An empty host uses `127.0.0.1:7788`, which refers to the phone itself.
+5. Close settings and run **Herdr: Diagnose connection**. Check that it finds the vault's workspace and tabs, then run **Herdr: Open terminal view**. Use **Herdr: Sync vault with laptop** to check sync separately.
 
 ## Commands
 
@@ -159,10 +169,10 @@ The embedded view takes over a pane while it is attached; other herdr clients st
 | --- | --- | --- |
 | Theme mode | Follow Obsidian | Follow Obsidian, or force the terminal's dark/light palette. |
 | Font size | 14 px | Terminal font size. Range 8–32 px. |
-| Prefix dropped files with @ | On | Use each harness's mention syntax for dropped paths. Off inserts a plain quoted path. |
+| 'Send to agent' menu option | On | Add 'Send to agent' to editor and file context menus. |
 | Let agents open notes | On | Open notes when an agent asks through herdr-bridge. |
 | Bridge host | `127.0.0.1:7788` | `host:port` of herdr-bridge. On a phone, the laptop's address (e.g. its Tailscale IP). |
-| Bridge token | — | From `herdr-bridge --print-token`. |
+| Bridge token | — | One token from `herdr-bridge --print-token`, grouped as `XXXX-XXXX`. Saved tokens are hidden until you choose Show token. The value is stored in this device's plugin settings. |
 | Sync automatically | On | Keep the vault in sync live: on connecting, on each change on the laptop, and after your edits (only with a bridge on another machine). |
 
 ## How it works
@@ -173,7 +183,12 @@ The embedded view takes over a pane while it is attached; other herdr clients st
 
 ## Troubleshooting
 
-- **Status bar says `Herdr (offline)`.** Check that herdr-bridge is running at the configured host, and that the token is set.
+- **Empty view or connection failure.** Run **Herdr: Diagnose connection** to see snapshot errors, the configured host, and whether a token is set. Connection failures currently have no dedicated offline indicator. Check that herdr-bridge is running and the token is correct.
+- **Android cannot connect.** Check that Tailscale is connected on both devices and that `tailscale serve status` on the laptop shows forwarding for port 7788. Set Android's bridge host to the laptop's address, and enter its token separately; vault sync does not copy connection settings.
+- **Plugin will not load on Android.** Check that Obsidian is 1.13.0 or later and that `main.js`, `manifest.json`, and `styles.css` are installed in that vault's `.obsidian/plugins/herdr/` folder.
+- **An older version asked for a secret ID.** Update the plugin. It now asks only for the token and recovers the value from a saved Obsidian secret ID when available on this device. If authentication still fails, replace the field with the output of `herdr-bridge --print-token`.
+- **No workspace or tabs on the phone.** Use the same vault name on both devices and open the vault in desktop Obsidian with Herdr enabled first. The phone attaches to an existing workspace in the `herdr-obsidian` session; tabs in the default herdr session are separate.
+- **Sync cannot find the vault.** The laptop's vault must be registered in desktop Obsidian and have the same name as the phone's vault. Sync can work without a herdr workspace, but agent tabs require one.
 - **Wrong or missing tabs.** Run **Herdr: Diagnose connection**; it prints the bridge, workspace match, and up to ten tabs.
 - **`Terminal session taken over by another client`.** Another herdr client grabbed the pane. Click the tab to re-attach.
 - **Agent colors look wrong.** Run `/theme light` or `/theme dark` inside a long-running agent; it only reads the background on startup.

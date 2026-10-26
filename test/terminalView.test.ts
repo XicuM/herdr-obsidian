@@ -9,7 +9,7 @@ let view: any; // private methods are exercised directly
 beforeEach(() => {
   notices.length = 0;
   plugin = {
-    settings: { addAtPrefixOnDrop: true },
+    settings: { sendToAgentMenu: true },
     getVaultFolderPath: () => '/home/u/vault',
     getConversations: () => [{ tab_id: 't1', agent: 'claude' }],
     app: {
@@ -80,12 +80,9 @@ describe('resolveDropPayload', () => {
     expect(view.resolveDropPayload(drop())).toBe(expected);
   });
 
-  it('drops bare paths in shell tabs or when the prefix is disabled', () => {
+  it('drops bare paths in shell tabs', () => {
     plugin.app.dragManager = { draggable: { type: 'file', file: { path: 'a.md' } } };
     plugin.getConversations = () => [{ tab_id: 't1', agent: null }];
-    expect(view.resolveDropPayload(drop())).toBe('a.md ');
-    plugin.getConversations = () => [{ tab_id: 't1', agent: 'claude' }];
-    plugin.settings.addAtPrefixOnDrop = false;
     expect(view.resolveDropPayload(drop())).toBe('a.md ');
   });
 
@@ -135,6 +132,62 @@ describe('handleDrop', () => {
     view.stream = { isRunning: true, sendInput: vi.fn() };
     view.sendReference(path, start, end);
     expect(view.stream.sendInput).toHaveBeenCalledWith(expected);
+  });
+});
+
+describe('handleCustomKeyEvent', () => {
+  it('sends newline on Shift+Enter when stream is running', () => {
+    view.stream = { isRunning: true, sendInput: vi.fn() };
+    const event = {
+      type: 'keydown',
+      key: 'Enter',
+      shiftKey: true,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      preventDefault: vi.fn()
+    } as unknown as KeyboardEvent;
+
+    const result = view.handleCustomKeyEvent(event);
+    expect(result).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(view.stream.sendInput).toHaveBeenCalledWith('\n');
+  });
+
+  it('does not intercept Enter without Shift', () => {
+    view.stream = { isRunning: true, sendInput: vi.fn() };
+    const event = {
+      type: 'keydown',
+      key: 'Enter',
+      shiftKey: false,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      preventDefault: vi.fn()
+    } as unknown as KeyboardEvent;
+
+    const result = view.handleCustomKeyEvent(event);
+    expect(result).toBe(true);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(view.stream.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('scrolls up on Shift+PageUp', () => {
+    view.stream = { isRunning: true, scroll: vi.fn() };
+    view.terminal = { rows: 30 };
+    const event = {
+      type: 'keydown',
+      key: 'PageUp',
+      shiftKey: true,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      preventDefault: vi.fn()
+    } as unknown as KeyboardEvent;
+
+    const result = view.handleCustomKeyEvent(event);
+    expect(result).toBe(false);
+    expect(view.stream.scroll).toHaveBeenCalledWith('up', 15);
   });
 });
 
