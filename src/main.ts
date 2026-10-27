@@ -33,7 +33,7 @@ export interface HerdrSettings {
 
 const DEFAULT_SETTINGS: HerdrSettings = {
   themeMode: 'auto', // Follow Obsidian theme
-  fontSize: 14,
+  fontSize: 16,
   sendToAgentMenu: true,
   tabOrder: [],
   bridgeHost: '',

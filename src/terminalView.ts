@@ -320,7 +320,7 @@ export class HerdrTerminalView extends ItemView {
 
   public updateSettings() {
     if (!this.terminal) return;
-    this.terminal.options.fontSize = this.plugin.settings.fontSize || 14;
+    this.terminal.options.fontSize = this.plugin.settings.fontSize || 16;
     this.terminal.options.lineHeight = 1.1;
     this.applyTheme();
     this.handleResize();
@@ -339,7 +339,7 @@ export class HerdrTerminalView extends ItemView {
       cursorBlink: !Platform.isMobile,
       cursorStyle: 'block',
       fontFamily: "ui-monospace, 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace",
-      fontSize: this.plugin.settings.fontSize || 14,
+      fontSize: this.plugin.settings.fontSize || 16,
       lineHeight: 1.1,
       scrollback: 1000,
       theme,
