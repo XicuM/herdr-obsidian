@@ -72,7 +72,7 @@ export class HerdrTerminalView extends ItemView {
   }
 
   getIcon(): string {
-    return 'herdr';
+    return 'bot';
   }
 
   async onOpen() {
