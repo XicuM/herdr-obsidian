@@ -1,3 +1,4 @@
+import { AGENT_LOGOS } from './agentLogos';
 import { App, ItemView, WorkspaceLeaf, Menu, Notice, TFile, TFolder, TAbstractFile, setIcon, Platform } from 'obsidian';
 import { IBufferLine, ILink, Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -715,11 +716,18 @@ export class HerdrTerminalView extends ItemView {
 
       const innerEl = tabEl.createDiv({ cls: 'herdr-tab-inner' });
 
-      // Status dot (color + shape + text alternative for colorblind users)
+      // Status dot (color + shape + text alternative for colorblind users). An agent with a logo, as in
+      // herdr-mobile, shows it inside the status ring instead.
+      const agent = (c.agent || '').toLowerCase();
+      const logo = AGENT_LOGOS.find((l) => l.names.some((n) => agent.includes(n)));
       const dotWrap = innerEl.createDiv({ cls: 'herdr-tab-status' });
-      const dot = dotWrap.createSpan({ cls: `herdr-status-dot status-${c.status}` });
+      const dot = dotWrap.createSpan({ cls: `herdr-status-dot status-${c.status}${logo ? ' has-logo' : ''}` });
       dot.setAttribute('role', 'img');
       dot.setAttribute('aria-label', `Status: ${c.status}`);
+      if (logo) {
+        dot.appendChild(new DOMParser().parseFromString(logo.svg, 'image/svg+xml').documentElement);
+        if (logo.tint) dot.style.color = logo.tint;
+      }
 
       // Tab label
       innerEl.createDiv({ cls: 'herdr-tab-label', text: c.label });

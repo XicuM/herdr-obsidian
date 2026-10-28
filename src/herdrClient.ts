@@ -156,6 +156,25 @@ export class HerdrClient {
     return data.snapshot || data;
   }
 
+  /** The user's light/dark appearance, so the bridge themes this machine's OpenCode to match.
+   * Older bridges have no /api/appearance and answer 404, which is swallowed here. */
+  async setAppearance(mode: 'light' | 'dark'): Promise<void> {
+    const url = `${this.httpBase}/s/${encodeURIComponent(this.session)}/api/appearance`;
+    const res = await requestUrl({
+      url,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ mode }),
+      throw: false
+    });
+    if (res.status >= 400 && res.status !== 404) {
+      throw new Error(`Failed to set appearance (${res.status}): ${res.text}`);
+    }
+  }
+
   async createWorkspace(cwd: string, label: string, focus = false): Promise<{ workspace: Workspace }> {
     return (await this.rpc('workspace.create', { cwd, label, focus })) as { workspace: Workspace };
   }

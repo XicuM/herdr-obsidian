@@ -66,6 +66,7 @@ export default class HerdrPlugin extends Plugin {
   private unsubscribeEvents: (() => void) | null = null;
   /** Bumped on each disconnect, so a subscription that resolves afterwards knows it is stale. */
   private connection = 0;
+  private lastAppearance: 'light' | 'dark' | null = null;
   private refreshRunning: Promise<void> = Promise.resolve();
   private refreshQueued: Promise<void> | null = null;
   private syncRunning: Promise<void> = Promise.resolve();
@@ -282,6 +283,13 @@ export default class HerdrPlugin extends Plugin {
       });
     }
 
+    // Obsidian's light/dark into the machine's OpenCode: the same attributes the terminal palette
+    // watches, sent to the bridge, which sets them in OpenCode's cli.json (which it hot-reloads).
+    const themeObserver = new MutationObserver(() => void this.sendAppearance());
+    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+    this.register(() => themeObserver.disconnect());
+
     // Registered once the vault is loaded: loading it raises a `create` for every file.
     this.app.workspace.onLayoutReady(() => {
       this.registerEvent(this.app.vault.on('create', (f) => this.localEdited(f.path)));
@@ -307,6 +315,30 @@ export default class HerdrPlugin extends Plugin {
     // The bridge pushes every new snapshot, so nothing polls.
     this.subscribeEvents();
     void this.refreshState();
+    void this.sendAppearance();
+  }
+
+  /** The terminal's effective light/dark: themeMode's choice, or Obsidian's own theme in `auto`. */
+  public effectiveAppearance(): 'light' | 'dark' {
+    const mode = this.settings.themeMode;
+    return mode === 'light' || (mode === 'auto' && document.body.classList.contains('theme-light')) ? 'light' : 'dark';
+  }
+
+  /**
+   * Tells the bridge the appearance, so this machine's OpenCode themes itself to match. The bridge
+   * sets it in OpenCode's cli.json, which OpenCode reloads while it runs. Sent once per change; an
+   * old bridge (404) or a dead connection just retries on the next change or reconnect.
+   */
+  public async sendAppearance(): Promise<void> {
+    if (!this.client.isConfigured()) return;
+    const mode = this.effectiveAppearance();
+    if (mode === this.lastAppearance) return;
+    try {
+      await this.client.setAppearance(mode);
+      this.lastAppearance = mode;
+    } catch {
+      // An old bridge or a dead connection: the next change or reconnect retries.
+    }
   }
 
   private disconnect() {
@@ -871,6 +903,9 @@ export class HerdrSettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
     if (key === 'themeMode' || key === 'fontSize') {
       this.plugin.getTerminalView()?.updateSettings();
+    }
+    if (key === 'themeMode') {
+      void this.plugin.sendAppearance();
     }
   }
 

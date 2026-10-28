@@ -592,6 +592,23 @@
   border: 1.5px dashed var(--color-base-50, var(--text-muted, #6c7086));
 }
 
+/* With an agent logo the dot becomes a hollow ring around it (as in herdr-mobile); the status keeps its border colour. */
+.herdr-status-dot.has-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background-color: transparent;
+  border-width: 2px;
+  color: var(--tab-text-color, var(--text-muted));
+}
+
+.herdr-status-dot.has-logo svg {
+  width: 10px;
+  height: 10px;
+}
+
 @keyframes herdr-pulse {
   0% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.85); }

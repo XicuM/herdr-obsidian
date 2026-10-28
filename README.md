@@ -130,7 +130,7 @@ Vault sync excludes `.obsidian`, so it does not install or update the plugin or 
 
 ## Getting started
 
-1. Run herdr-bridge where your agents run, and print its token there: `herdr-bridge --print-token`.
+1. Install herdr-bridge where your agents run (`herdr plugin install XicuM/herdr-bridge`), then print its token there: `herdr-bridge --print-token`.
 2. In the plugin settings, enter the token in **Bridge token**, e.g. `K3MF-9QXA`. It is one token; no secret ID is needed. The field groups characters in fours and lets you show or hide the value. On a phone, also set **Bridge host** to that machine's address (e.g. `100.85.12.34:7788`).
 3. Run **Herdr: Open terminal view** from the command palette.
 4. Create an agent with **Herdr: New agent conversation**, or open a shell with **Herdr: New terminal tab**.
