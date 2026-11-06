@@ -1,4 +1,4 @@
-import { requestUrl } from 'obsidian';
+import { Platform, requestUrl } from 'obsidian';
 import type { RemoteChange } from './vaultSync';
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
@@ -243,7 +243,9 @@ export class HerdrClient {
     let ws: WebSocket | null = null;
     let closed = false;
     let retryTimer: number | null = null;
-    // Doubles up to a minute while the bridge is unreachable, so an offline phone isn't woken every few seconds.
+    // Doubles while the bridge is unreachable: up to a minute on a phone, so an offline one isn't woken
+    // every few seconds; up to 10 s on desktop, where a bridge restarting must not leave it stale for long.
+    const maxDelay = Platform.isMobile ? 60000 : 10000;
     let delay = 1000;
 
     const connect = () => {
@@ -267,7 +269,7 @@ export class HerdrClient {
             // Shown like the bridge's own errors: there is no live snapshot until it reconnects.
             cb({ type: 'error', error: 'Bridge unreachable' });
             retryTimer = window.setTimeout(connect, delay);
-            delay = Math.min(delay * 2, 60000);
+            delay = Math.min(delay * 2, maxDelay);
           }
         };
       } catch {

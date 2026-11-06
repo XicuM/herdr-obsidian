@@ -70,6 +70,11 @@ export default class HerdrPlugin extends Plugin {
   private localEditsTimer = 0;
   /** The conversations last rendered, to skip re-rendering when a snapshot changed nothing shown. */
   private renderedKey = '';
+  /** Whether a snapshot has arrived on this connection: until then the view says it is connecting. */
+  private snapshotLoaded = false;
+  /** Retries a failed snapshot fetch, so a bridge or herdr still starting up doesn't leave the tabs empty. */
+  private snapshotRetryTimer = 0;
+  private snapshotRetryDelay = 500;
   private convByTab = new Map<string, Conversation>();
   private currentActiveTabId?: string;
   private singletonWorkspaceId?: string;
@@ -335,6 +340,9 @@ export default class HerdrPlugin extends Plugin {
 
   private disconnect() {
     this.connection++;
+    window.clearTimeout(this.snapshotRetryTimer);
+    this.snapshotRetryTimer = 0;
+    this.snapshotRetryDelay = 500;
     this.unsubscribeEvents?.();
     this.unsubscribeEvents = null;
   }
@@ -463,6 +471,14 @@ export default class HerdrPlugin extends Plugin {
     return null;
   }
 
+  /** Every open terminal view: a deferred or second leaf must not be left showing stale tabs. */
+  public getTerminalViews(): HerdrTerminalView[] {
+    return this.app.workspace
+      .getLeavesOfType(HERDR_VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .filter((view): view is HerdrTerminalView => view instanceof HerdrTerminalView);
+  }
+
   public getTerminalView(): HerdrTerminalView | null {
     const leaves = this.app.workspace.getLeavesOfType(HERDR_VIEW_TYPE);
     if (leaves.length > 0 && leaves[0].view instanceof HerdrTerminalView) {
@@ -524,8 +540,10 @@ export default class HerdrPlugin extends Plugin {
         // Live vault sync: the whole vault on each (re)connect, to catch up on what the bridge pushed
         // while there was no connection, then each change it pushes. Only once the vault is loaded:
         // before, every file would look deleted on the phone.
-        else if (evt.type === 'connected' && this.settings.autoSyncOnOpen) {
-          this.app.workspace.onLayoutReady(() => void this.syncVault(false));
+        else if (evt.type === 'connected') {
+          // The bridge pushes a snapshot on connect too, but a fetch also covers one that failed earlier.
+          void this.refreshState();
+          if (this.settings.autoSyncOnOpen) this.app.workspace.onLayoutReady(() => void this.syncVault(false));
         } else if (evt.type === 'vault_changed' && evt.vault === this.app.vault.getName() && this.settings.autoSyncOnOpen) {
           this.app.workspace.onLayoutReady(() => void this.syncVault(false, evt.files));
         }
@@ -558,17 +576,44 @@ export default class HerdrPlugin extends Plugin {
       this.updateStatusBar([], false);
       return;
     }
+    const connection = this.connection;
     let snapshot: Snapshot;
     try {
       snapshot = await this.client.snapshot();
     } catch {
       this.updateStatusBar([], false);
+      this.scheduleSnapshotRetry(connection);
       return;
     }
+    if (connection !== this.connection) return;
     await this.applySnapshot(snapshot);
   }
 
+  /**
+   * After a failed fetch, tries again soon (0.5 s, doubling to 10 s), until a snapshot arrives by
+   * either route: at startup the bridge may still be starting herdr, and the push socket's own
+   * reconnects back off much further.
+   */
+  private scheduleSnapshotRetry(connection: number) {
+    if (connection !== this.connection || this.snapshotRetryTimer) return;
+    this.snapshotRetryTimer = window.setTimeout(() => {
+      this.snapshotRetryTimer = 0;
+      if (connection === this.connection) void this.refreshState();
+    }, this.snapshotRetryDelay);
+    this.snapshotRetryDelay = Math.min(this.snapshotRetryDelay * 2, 10000);
+  }
+
+  /** Whether any snapshot has arrived yet, so the view can say "connecting" rather than "no tabs". */
+  public hasSnapshot(): boolean {
+    return this.snapshotLoaded;
+  }
+
   private async applySnapshot(snapshot: Snapshot) {
+    window.clearTimeout(this.snapshotRetryTimer);
+    this.snapshotRetryTimer = 0;
+    this.snapshotRetryDelay = 500;
+    const first = !this.snapshotLoaded;
+    this.snapshotLoaded = true;
     try {
       this.singletonWorkspaceId = await this.findVaultWorkspace(snapshot);
     } catch {
@@ -584,10 +629,10 @@ export default class HerdrPlugin extends Plugin {
 
     // Re-rendering unchanged tabs would cost battery, and break a drag or double-click in progress.
     const key = JSON.stringify(convs);
-    if (key !== this.renderedKey) {
+    if (key !== this.renderedKey || first) {
       this.renderedKey = key;
       this.updateStatusBar(convs, true);
-      this.getTerminalView()?.renderTabs();
+      for (const view of this.getTerminalViews()) view.renderTabs();
     }
   }
 

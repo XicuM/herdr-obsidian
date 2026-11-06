@@ -691,7 +691,10 @@ export class HerdrTerminalView extends ItemView {
       this.attachToPane(convs[0].pane_id);
     }
 
-    if (convs.length === 0) {
+    if (convs.length === 0 && !this.plugin.hasSnapshot()) {
+      // No answer from herdr yet: offering "New terminal tab" now would duplicate tabs that do exist.
+      this.tabBarEl.createDiv({ cls: 'herdr-tab-empty' }).createSpan({ text: 'Connecting to herdr…' });
+    } else if (convs.length === 0) {
       const emptyWrap = this.tabBarEl.createDiv({ cls: 'herdr-tab-empty' });
       emptyWrap.createSpan({ text: 'No terminal tabs' });
       const newTabBtn = emptyWrap.createEl('button', { cls: 'herdr-empty-btn', text: 'New terminal tab' });
